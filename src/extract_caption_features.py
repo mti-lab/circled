@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-GPT-4o miniで生成されたキャプションをCLIPとBLIPで特徴量変換して保存するスクリプト
-CIRR、CIRCO、Fashion-IQデータセット対応
+Script to convert GPT-4o mini generated captions to CLIP and BLIP feature vectors.
+Supports CIRR, CIRCO, and Fashion-IQ datasets.
 """
 
 import os
@@ -23,35 +23,35 @@ from transformers import (
 class CaptionFeatureExtractor:
     def __init__(self, device='cuda'):
         self.device = device
-        print(f"使用デバイス: {self.device}")
+        print(f"Using device: {self.device}")
         
-        # CLIPモデルの初期化（OpenCLIP ViT-L/14）
-        print("CLIPモデルをロード中...")
+        # Initialize CLIP model (OpenCLIP ViT-L/14)
+        print("Loading CLIP model...")
         self.clip_model, self.clip_preprocess = clip.load("ViT-L/14", device=device)
         self.clip_model.eval()
         
-        # BLIPモデルの初期化（large版に統一）
-        print("BLIPモデルをロード中...")
+        # Initialize BLIP model (using large version)
+        print("Loading BLIP model...")
         self.blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-itm-large-coco")
         self.blip_model = BlipForImageTextRetrieval.from_pretrained("Salesforce/blip-itm-large-coco").to(device)
         self.blip_model.eval()
         
-        print("モデルのロードが完了しました")
+        print("Model loading complete")
     
     def extract_clip_features(self, captions, batch_size=32):
-        """CLIPでキャプションの特徴量を抽出"""
-        print(f"CLIP特徴量抽出開始: {len(captions)}件のキャプション")
+        """Extract caption features using CLIP"""
+        print(f"Starting CLIP feature extraction: {len(captions)} captions")
         
         features = []
         
         with torch.no_grad():
-            for i in tqdm(range(0, len(captions), batch_size), desc="CLIP特徴量抽出"):
+            for i in tqdm(range(0, len(captions), batch_size), desc="CLIP feature extraction"):
                 batch_captions = captions[i:i+batch_size]
                 
-                # OpenCLIPでテキストをトークン化
+                # Tokenize text with OpenCLIP
                 text_tokens = clip.tokenize(batch_captions, truncate=True).to(self.device)
                 
-                # 特徴量を抽出
+                # Extract features
                 text_features = self.clip_model.encode_text(text_tokens).to(torch.float32)
                 text_features = F.normalize(text_features, dim=-1)
                 
@@ -60,16 +60,16 @@ class CaptionFeatureExtractor:
         return np.vstack(features)
     
     def extract_blip_features(self, captions, batch_size=16):
-        """BLIPでキャプションの特徴量を抽出"""
-        print(f"BLIP特徴量抽出開始: {len(captions)}件のキャプション")
+        """Extract caption features using BLIP"""
+        print(f"Starting BLIP feature extraction: {len(captions)} captions")
         
         features = []
         
         with torch.no_grad():
-            for i in tqdm(range(0, len(captions), batch_size), desc="BLIP特徴量抽出"):
+            for i in tqdm(range(0, len(captions), batch_size), desc="BLIP feature extraction"):
                 batch_captions = captions[i:i+batch_size]
                 
-                # テキストをトークン化
+                # Tokenize text
                 inputs = self.blip_processor(
                     text=batch_captions,
                     return_tensors="pt",
@@ -77,14 +77,14 @@ class CaptionFeatureExtractor:
                     truncation=True
                 ).to(self.device)
                 
-                # BLIPモデルでテキスト特徴量を抽出（参考コードと同じ方法）
+                # Extract text features using BLIP model (same method as reference code)
                 question_embeds = self.blip_model.text_encoder(
                     input_ids=inputs.input_ids,
                     attention_mask=inputs.attention_mask,
                     return_dict=True
                 ).last_hidden_state
                 
-                # CLSトークン（最初のトークン）を使用してtext_projを通す
+                # Use CLS token (first token) and pass through text_proj
                 text_features = self.blip_model.text_proj(question_embeds[:, 0, :])
                 text_features = F.normalize(text_features, dim=-1)
                 
@@ -93,8 +93,8 @@ class CaptionFeatureExtractor:
         return np.vstack(features)
 
 def load_gpt4omini_captions(caption_file):
-    """GPT-4o miniキャプションファイルを読み込み"""
-    print(f"キャプションファイル読み込み: {caption_file}")
+    """Load GPT-4o mini caption file"""
+    print(f"Loading caption file: {caption_file}")
     
     with open(caption_file, 'r', encoding='utf-8') as f:
         data = json.load(f)
@@ -102,7 +102,7 @@ def load_gpt4omini_captions(caption_file):
     captions = []
     image_ids = []
     
-    # データ構造に応じて処理
+    # Process according to data structure
     if isinstance(data, dict):
         for image_id, caption in data.items():
             image_ids.append(image_id)
@@ -116,14 +116,14 @@ def load_gpt4omini_captions(caption_file):
                 image_ids.append(item['id'])
                 captions.append(item['caption'])
     
-    print(f"読み込み完了: {len(captions)}件のキャプション")
+    print(f"Loading complete: {len(captions)} captions")
     return captions, image_ids
 
 def save_features(features, image_ids, output_file, feature_type):
-    """特徴量をファイルに保存"""
-    print(f"{feature_type}特徴量を保存中: {output_file}")
+    """Save features to file"""
+    print(f"Saving {feature_type} features: {output_file}")
     
-    # 特徴量データの構造
+    # Feature data structure
     feature_data = {
         'features': features,
         'image_ids': image_ids,
@@ -132,44 +132,44 @@ def save_features(features, image_ids, output_file, feature_type):
     }
     
     torch.save(feature_data, output_file)
-    print(f"保存完了: {features.shape} -> {output_file}")
+    print(f"Saved: {features.shape} -> {output_file}")
 
 def merge_features(existing_features, existing_image_ids, new_features, new_image_ids, feature_type):
-    """既存の特徴量と新しい特徴量をマージ"""
-    print(f"{feature_type}特徴量をマージ中...")
-    print(f"  既存: {len(existing_image_ids)}枚")
-    print(f"  新規: {len(new_image_ids)}枚")
+    """Merge existing features with new features"""
+    print(f"Merging {feature_type} features...")
+    print(f"  Existing: {len(existing_image_ids)} images")
+    print(f"  New: {len(new_image_ids)} images")
     
-    # numpy配列の場合はテンソルに変換
+    # Convert numpy arrays to tensors if needed
     if isinstance(existing_features, np.ndarray):
         existing_features = torch.from_numpy(existing_features).float()
     if isinstance(new_features, np.ndarray):
         new_features = torch.from_numpy(new_features).float()
     
-    # 特徴量を結合
+    # Concatenate features
     merged_features = torch.cat([existing_features, new_features], dim=0)
     merged_image_ids = existing_image_ids + new_image_ids
     
-    print(f"  マージ後: {len(merged_image_ids)}枚")
+    print(f"  After merge: {len(merged_image_ids)} images")
     return merged_features, merged_image_ids
 
 def extract_missing_features(extractor, all_captions, all_image_ids, existing_image_ids, feature_type):
-    """不足している画像の特徴量のみを抽出"""
-    # 不足している画像IDを特定
+    """Extract features only for missing images"""
+    # Identify missing image IDs
     existing_set = set(existing_image_ids)
     missing_indices = [i for i, img_id in enumerate(all_image_ids) if img_id not in existing_set]
     
     if not missing_indices:
-        print(f"{feature_type}: 不足している画像はありません")
+        print(f"{feature_type}: No missing images")
         return None, []
     
-    print(f"{feature_type}: {len(missing_indices)}枚の不足画像を検出")
+    print(f"{feature_type}: Detected {len(missing_indices)} missing images")
     
-    # 不足している画像のキャプションを抽出
+    # Extract captions for missing images
     missing_captions = [all_captions[i] for i in missing_indices]
     missing_image_ids = [all_image_ids[i] for i in missing_indices]
     
-    # 特徴量抽出
+    # Extract features
     if feature_type == 'CLIP':
         missing_features = extractor.extract_clip_features(missing_captions)
     elif feature_type == 'BLIP':
@@ -180,135 +180,135 @@ def extract_missing_features(extractor, all_captions, all_image_ids, existing_im
     return missing_features, missing_image_ids
 
 def process_dataset(dataset_name, caption_file, output_dir, extractor, force_reprocess=False):
-    """各データセットの処理（増分更新対応）"""
-    print(f"\n=== {dataset_name}データセット処理開始 ===")
+    """Process each dataset (with incremental update support)"""
+    print(f"\n=== Processing {dataset_name} dataset ===")
     
-    # キャプション読み込み
+    # Load captions
     captions, image_ids = load_gpt4omini_captions(caption_file)
     
     if len(captions) == 0:
-        print(f"警告: {dataset_name}のキャプションが見つかりません")
+        print(f"Warning: No captions found for {dataset_name}")
         return
     
-    # 出力ディレクトリ作成
+    # Create output directory
     dataset_output_dir = Path(output_dir) / dataset_name
     dataset_output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 出力ファイルパス
+    # Output file paths
     clip_output_file = dataset_output_dir / 'gpt4omini_captions_clip_features.pt'
     blip_output_file = dataset_output_dir / 'gpt4omini_captions_blip_features.pt'
     
-    # CLIP特徴量の処理（増分更新対応）
+    # CLIP feature processing (with incremental update support)
     if clip_output_file.exists() and not force_reprocess:
-        print(f"CLIP特徴量ファイルが既に存在します: {clip_output_file}")
+        print(f"CLIP feature file already exists: {clip_output_file}")
         try:
             existing_data = torch.load(clip_output_file, weights_only=False)
             existing_image_ids = existing_data['image_ids']
             existing_features = existing_data['features']
             
             if len(existing_image_ids) == len(image_ids) and existing_image_ids == image_ids:
-                print("CLIP特徴量は既に完了しています。スキップします。")
+                print("CLIP features already complete. Skipping.")
             else:
-                print(f"既存CLIP特徴量: {len(existing_image_ids)}枚, 必要: {len(image_ids)}枚")
+                print(f"Existing CLIP features: {len(existing_image_ids)} images, Required: {len(image_ids)} images")
                 
-                # 不足分のみ抽出
+                # Extract only missing features
                 missing_features, missing_image_ids = extract_missing_features(
                     extractor, captions, image_ids, existing_image_ids, 'CLIP'
                 )
-                
+
                 if missing_features is not None:
-                    # 既存と新規をマージ
+                    # Merge existing and new features
                     merged_features, merged_image_ids = merge_features(
                         existing_features, existing_image_ids, 
                         missing_features, missing_image_ids, 'CLIP'
                     )
                     save_features(merged_features, merged_image_ids, clip_output_file, 'CLIP')
                 else:
-                    print("CLIP特徴量: 追加する画像がありません")
+                    print("CLIP features: No images to add")
                     
         except Exception as e:
-            print(f"既存のCLIP特徴量ファイルの読み込みに失敗: {e}")
-            print("CLIP特徴量を一から再処理します。")
+            print(f"Failed to load existing CLIP feature file: {e}")
+            print("Reprocessing CLIP features from scratch.")
             clip_features = extractor.extract_clip_features(captions)
             save_features(clip_features, image_ids, clip_output_file, 'CLIP')
     else:
         if force_reprocess and clip_output_file.exists():
-            print("強制再処理モード: 既存のCLIP特徴量ファイルを上書きします。")
+            print("Force reprocess mode: Overwriting existing CLIP feature file.")
         else:
-            print("CLIP特徴量を新規作成します。")
+            print("Creating new CLIP features.")
         clip_features = extractor.extract_clip_features(captions)
         save_features(clip_features, image_ids, clip_output_file, 'CLIP')
     
-    # BLIP特徴量の処理（増分更新対応）
+    # BLIP feature processing (with incremental update support)
     if blip_output_file.exists() and not force_reprocess:
-        print(f"BLIP特徴量ファイルが既に存在します: {blip_output_file}")
+        print(f"BLIP feature file already exists: {blip_output_file}")
         try:
             existing_data = torch.load(blip_output_file, weights_only=False)
             existing_image_ids = existing_data['image_ids']
             existing_features = existing_data['features']
             
             if len(existing_image_ids) == len(image_ids) and existing_image_ids == image_ids:
-                print("BLIP特徴量は既に完了しています。スキップします。")
+                print("BLIP features already complete. Skipping.")
             else:
-                print(f"既存BLIP特徴量: {len(existing_image_ids)}枚, 必要: {len(image_ids)}枚")
+                print(f"Existing BLIP features: {len(existing_image_ids)} images, Required: {len(image_ids)} images")
                 
-                # 不足分のみ抽出
+                # Extract only missing features
                 missing_features, missing_image_ids = extract_missing_features(
                     extractor, captions, image_ids, existing_image_ids, 'BLIP'
                 )
-                
+
                 if missing_features is not None:
-                    # 既存と新規をマージ
+                    # Merge existing and new features
                     merged_features, merged_image_ids = merge_features(
                         existing_features, existing_image_ids, 
                         missing_features, missing_image_ids, 'BLIP'
                     )
                     save_features(merged_features, merged_image_ids, blip_output_file, 'BLIP')
                 else:
-                    print("BLIP特徴量: 追加する画像がありません")
+                    print("BLIP features: No images to add")
                     
         except Exception as e:
-            print(f"既存のBLIP特徴量ファイルの読み込みに失敗: {e}")
-            print("BLIP特徴量を一から再処理します。")
+            print(f"Failed to load existing BLIP feature file: {e}")
+            print("Reprocessing BLIP features from scratch.")
             blip_features = extractor.extract_blip_features(captions)
             save_features(blip_features, image_ids, blip_output_file, 'BLIP')
     else:
         if force_reprocess and blip_output_file.exists():
-            print("強制再処理モード: 既存のBLIP特徴量ファイルを上書きします。")
+            print("Force reprocess mode: Overwriting existing BLIP feature file.")
         else:
-            print("BLIP特徴量を新規作成します。")
+            print("Creating new BLIP features.")
         blip_features = extractor.extract_blip_features(captions)
         save_features(blip_features, image_ids, blip_output_file, 'BLIP')
     
-    print(f"=== {dataset_name}データセット処理完了 ===")
+    print(f"=== {dataset_name} dataset processing complete ===")
 
 def main():
-    parser = argparse.ArgumentParser(description='GPT-4o miniキャプションから特徴量抽出')
-    parser.add_argument('--datasets', nargs='+', 
+    parser = argparse.ArgumentParser(description='Extract features from GPT-4o mini captions')
+    parser.add_argument('--datasets', nargs='+',
                        choices=['cirr', 'circo', 'fashion-iq', 'all'],
                        default=['all'],
-                       help='処理するデータセット')
-    parser.add_argument('--output-dir', type=str, 
+                       help='Datasets to process')
+    parser.add_argument('--output-dir', type=str,
                        default='caption_features',
-                       help='出力ディレクトリ')
-    parser.add_argument('--device', type=str, 
+                       help='Output directory')
+    parser.add_argument('--device', type=str,
                        default='cuda' if torch.cuda.is_available() else 'cpu',
-                       help='使用デバイス')
+                       help='Device to use')
     parser.add_argument('--force-reprocess', action='store_true',
-                       help='既存の特徴量ファイルを無視して強制的に再処理')
+                       help='Force reprocess ignoring existing feature files')
     
     args = parser.parse_args()
     
-    print("=== GPT-4o miniキャプション特徴量抽出開始 ===")
-    print(f"使用デバイス: {args.device}")
-    print(f"CUDA利用可能: {torch.cuda.is_available()}")
+    print("=== Starting GPT-4o mini caption feature extraction ===")
+    print(f"Device: {args.device}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
     if args.force_reprocess:
-        print("強制再処理モード: 既存ファイルを上書きします")
+        print("Force reprocess mode: Overwriting existing files")
     
-    # 特徴量抽出器を初期化
+    # Initialize feature extractor
     extractor = CaptionFeatureExtractor(device=args.device)
     
-    # データセット設定（クリーンアップ済みファイルを使用）
+    # Dataset configuration (using cleaned caption files)
     dataset_configs = {
         'cirr': {
             'caption_file': './cirr/captions_gpt4omini.json',
@@ -324,19 +324,19 @@ def main():
         }
     }
     
-    # 処理するデータセットを決定
+    # Determine which datasets to process
     if 'all' in args.datasets:
         datasets_to_process = list(dataset_configs.keys())
     else:
         datasets_to_process = args.datasets
     
-    # 各データセットを処理
+    # Process each dataset
     for dataset_key in datasets_to_process:
         if dataset_key in dataset_configs:
             config = dataset_configs[dataset_key]
             caption_file = config['caption_file']
             
-            # ファイル存在確認
+            # Check if file exists
             if os.path.exists(caption_file):
                 try:
                     process_dataset(
@@ -347,15 +347,15 @@ def main():
                         force_reprocess=args.force_reprocess
                     )
                 except Exception as e:
-                    print(f"エラー: {config['name']}の処理中にエラーが発生しました: {e}")
+                    print(f"Error: An error occurred while processing {config['name']}: {e}")
                     import traceback
                     traceback.print_exc()
             else:
-                print(f"警告: {caption_file}が見つかりません")
+                print(f"Warning: {caption_file} not found")
         else:
-            print(f"警告: 不明なデータセット: {dataset_key}")
+            print(f"Warning: Unknown dataset: {dataset_key}")
     
-    print("\n=== 全ての処理が完了しました ===")
+    print("\n=== All processing complete ===")
 
 if __name__ == "__main__":
     main() 

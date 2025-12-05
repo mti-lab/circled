@@ -15,7 +15,7 @@ import argparse
 import clip
 
 class MultiDatasetImageProcessor:
-    """複数データセット対応の画像プロセッサ（PyTorch版）"""
+    """Multi-dataset image processor (PyTorch version)"""
     
     def __init__(self, model_name="blip", device='cuda'):
         self.device = device
@@ -30,13 +30,13 @@ class MultiDatasetImageProcessor:
         elif self.model_name == "clip":
             # CLIP model setup
             self.model, self.preprocess = clip.load("ViT-L/14", device=device)
-            self.feature_dim = 768  # ViT-L/14の特徴量次元
+            self.feature_dim = 768  # ViT-L/14 feature dimension
             print(f"Loaded CLIP model: ViT-L/14")
         else:
             raise ValueError(f"Unsupported model: {model_name}. Use 'blip' or 'clip'")
 
     def load_dataset_configs(self):
-        """データセット設定を読み込み"""
+        """Load dataset configuration"""
         configs = {
             'fashion-iq': {
                 'data_dir': 'fashion-iq/images',
@@ -80,13 +80,13 @@ class MultiDatasetImageProcessor:
         return configs
 
     def get_image_hash(self, image_path):
-        """画像ファイルのハッシュを計算"""
+        """Calculate image file hash"""
         with open(image_path, 'rb') as f:
             file_hash = hashlib.md5(f.read()).hexdigest()
         return file_hash
 
     def collect_all_images(self, configs, splits=['train', 'val', 'test']):
-        """全データセットから画像を収集"""
+        """Collect images from all datasets"""
         all_images = []
         all_info = {}
         
@@ -107,7 +107,7 @@ class MultiDatasetImageProcessor:
                         
                         with open(split_file, 'r') as f:
                             if dataset_name == 'circo' and 'annotations' in split_file:
-                                # CIRCOのJSONファイル形式
+                                # CIRCO JSON file format
                                 data = json.load(f)
                                 image_ids = set()
                                 for item in data:
@@ -117,15 +117,15 @@ class MultiDatasetImageProcessor:
                                         image_ids.add(str(item['target_img_id']))
                                 image_ids = list(image_ids)
                             else:
-                                # 通常のJSONファイル形式（画像IDのリスト）
+                                # Normal JSON file format (list of image IDs)
                                 image_ids = json.load(f)
                         
                         for image_id in image_ids:
                             if dataset_name == 'circo':
-                                # CIRCOはCOCO形式のファイル名
+                                # CIRCO uses COCO format filenames
                                 image_filename = f"{image_id.zfill(12)}.jpg"
                             else:
-                                # FashionIQとCIRRは拡張子つき
+                                # FashionIQ and CIRR have extensions
                                 image_filename = image_id
                             
                             image_path = os.path.join(data_dir, image_filename)
@@ -159,7 +159,7 @@ class MultiDatasetImageProcessor:
         return all_images, all_info
 
 class ImageFeatureDataset(Dataset):
-    """画像特徴量抽出用データセット"""
+    """Dataset for image feature extraction"""
     
     def __init__(self, image_list, processor_instance):
         self.image_list = image_list
@@ -175,10 +175,10 @@ class ImageFeatureDataset(Dataset):
             image = Image.open(image_path).convert('RGB')
             
             if self.processor_instance.model_name == "blip":
-                # BLIP処理
+                # BLIP processing
                 processed_image = self.processor_instance.processor(images=image, return_tensors="pt")['pixel_values'][0]
             elif self.processor_instance.model_name == "clip":
-                # CLIP処理
+                # CLIP processing
                 processed_image = self.processor_instance.preprocess(image)
             
             return {
@@ -188,11 +188,11 @@ class ImageFeatureDataset(Dataset):
             }
         except Exception as e:
             print(f"Error processing image {image_path}: {e}")
-            # エラー時は黒い画像を返す
+            # Return black image on error
             if self.processor_instance.model_name == "blip":
-                processed_image = torch.zeros(3, 384, 384)  # BLIPの入力サイズ
+                processed_image = torch.zeros(3, 384, 384)  # BLIP input size
             else:
-                processed_image = torch.zeros(3, 224, 224)  # CLIPの入力サイズ
+                processed_image = torch.zeros(3, 224, 224)  # CLIP input size
             
             return {
                 'image': processed_image,
@@ -201,8 +201,8 @@ class ImageFeatureDataset(Dataset):
             }
 
 def collate_fn(batch):
-    """カスタムバッチ処理関数"""
-    # Noneを除外
+    """Custom batch processing function"""
+    # Exclude None
     batch = [item for item in batch if item is not None]
     
     if len(batch) == 0:
@@ -219,24 +219,24 @@ def collate_fn(batch):
     }
 
 def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size=32, num_workers=4):
-    """PyTorch形式で特徴量を抽出・保存"""
+    """Extract and save features in PyTorch format"""
     
-    # 出力ファイル名にモデル名を含める
+    # Include model name in output filename
     model_suffix = processor_instance.model_name
     features_file = os.path.join(output_dir, f'features_{model_suffix}.pt')
     metadata_file = os.path.join(output_dir, f'metadata_{model_suffix}.pt')
     
-    # データセット設定を読み込み
+    # Load dataset configuration
     configs = processor_instance.load_dataset_configs()
     
-    # すべての画像を収集
+    # Collect all images
     all_images, all_info = processor_instance.collect_all_images(configs)
     
     if len(all_images) == 0:
         print("No images found!")
         return None, None
     
-    # データセットとデータローダーを作成
+    # Create dataset and dataloader
     dataset = ImageFeatureDataset(all_images, processor_instance)
     dataloader = DataLoader(
         dataset,
@@ -252,7 +252,7 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
     print(f"Batch size: {batch_size}")
     print(f"Device: {processor_instance.device}")
     
-    # 特徴量抽出
+    # Feature extraction
     all_features = []
     all_hashes = []
     hash_to_idx = {}
@@ -266,36 +266,36 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
             image_paths = batch['image_paths']
             indices = batch['indices']
             
-            # モデル別の特徴量抽出
+            # Model-specific feature extraction
             if processor_instance.model_name == "blip":
-                # BLIP特徴量抽出
+                # BLIP feature extraction
                 vision_outputs = processor_instance.model.vision_model(pixel_values=images)
                 features = vision_outputs.last_hidden_state[:, 0, :].to(torch.float32)
                 features = F.normalize(processor_instance.model.vision_proj(features), dim=-1)
             
             elif processor_instance.model_name == "clip":
-                # CLIP特徴量抽出
+                # CLIP feature extraction
                 features = processor_instance.model.encode_image(images).to(torch.float32)
                 features = F.normalize(features, dim=-1)
             
-            # CPU に移動して保存
+            # Move to CPU and save
             features_cpu = features.cpu()
             all_features.append(features_cpu)
             
-            # ハッシュ計算
+            # Calculate hash
             for i, (path, idx) in enumerate(zip(image_paths, indices)):
                 img_hash = processor_instance.get_image_hash(path)
                 all_hashes.append(img_hash)
                 hash_to_idx[img_hash] = len(all_hashes) - 1
     
-    # 特徴量を結合
+    # Concatenate features
     features_tensor = torch.cat(all_features, dim=0)
     
     print(f"\nFeature extraction completed!")
     print(f"Features shape: {features_tensor.shape}")
     print(f"Features dtype: {features_tensor.dtype}")
     
-    # メタデータを準備
+    # Prepare metadata
     idx_to_info = {}
     dataset_splits = {}
     
@@ -304,7 +304,7 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
             info = all_info[img_hash]
             idx_to_info[idx] = info
             
-            # データセット/スプリット別のインデックスを記録
+            # Record indices by dataset/split
             key = f"{info['dataset']}/{info['split']}"
             if key not in dataset_splits:
                 dataset_splits[key] = []
@@ -324,7 +324,7 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
         }
     }
     
-    # 保存
+    # Save
     print(f"\nSaving features to: {features_file}")
     torch.save({
         'features': features_tensor,
@@ -335,7 +335,7 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
     print(f"Saving metadata to: {metadata_file}")
     torch.save(metadata, metadata_file)
     
-    # 統計情報を表示
+    # Display statistics
     print(f"\n=== Extraction Summary ===")
     print(f"Model: {processor_instance.model_name.upper()}")
     print(f"Total images processed: {len(all_hashes)}")
@@ -347,17 +347,17 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
     return features_file, metadata_file
 
 class PyTorchFeatureLoader:
-    """PyTorch形式の特徴量ローダー"""
+    """PyTorch format feature loader"""
     
     def __init__(self, features_file, metadata_file, device='cpu'):
         self.device = device
         self.features_file = features_file
         self.metadata_file = metadata_file
         
-        # メタデータ読み込み
+        # Load metadata
         self.metadata = torch.load(metadata_file, map_location='cpu')
         
-        # 特徴量は遅延読み込み
+        # Features are lazy loaded
         self._features = None
         self._hash_to_idx = self.metadata['hash_to_idx']
         
@@ -366,7 +366,7 @@ class PyTorchFeatureLoader:
         print(f"Feature dimension: {self.metadata['feature_dim']}")
 
     def _load_features(self):
-        """特徴量を読み込み（遅延読み込み）"""
+        """Load features (lazy loading)"""
         if self._features is None:
             print(f"Loading features to {self.device}...")
             feature_data = torch.load(self.features_file, map_location=self.device)
@@ -375,11 +375,11 @@ class PyTorchFeatureLoader:
 
     @property
     def features(self):
-        """全特徴量を取得"""
+        """Get all features"""
         return self._load_features()
 
     def get_features_by_dataset(self, dataset, split):
-        """データセット・スプリット別に特徴量を取得"""
+        """Get features by dataset and split"""
         key = f"{dataset}/{split}"
         if key not in self.metadata['dataset_splits']:
             raise KeyError(f"Dataset split not found: {key}")
@@ -390,7 +390,7 @@ class PyTorchFeatureLoader:
         return features[indices], torch.tensor(indices)
 
     def get_features_by_category(self, dataset, category, split):
-        """カテゴリ別に特徴量を取得"""
+        """Get features by category"""
         key = f"{dataset}/{split}"
         if key not in self.metadata['dataset_splits']:
             raise KeyError(f"Dataset split not found: {key}")
@@ -405,7 +405,7 @@ class PyTorchFeatureLoader:
         return features[indices], torch.tensor(indices)
 
     def get_feature_by_hash(self, img_hash):
-        """ハッシュで特徴量を取得"""
+        """Get features by hash"""
         if img_hash not in self._hash_to_idx:
             raise KeyError(f"Image hash not found: {img_hash}")
         
@@ -414,20 +414,20 @@ class PyTorchFeatureLoader:
         return features[idx]
 
     def get_features_by_indices(self, indices):
-        """インデックスリストで特徴量を取得"""
+        """Get features by index list"""
         features = self._load_features()
         return features[indices]
 
     def get_info_by_idx(self, idx):
-        """インデックスで画像情報を取得"""
+        """Get image info by index"""
         return self.metadata['idx_to_info'][idx]
 
     def compute_similarity(self, query_features, corpus_features=None):
-        """コサイン類似度を計算"""
+        """Calculate cosine similarity"""
         if corpus_features is None:
             corpus_features = self._load_features()
         
-        # GPU上で高速計算
+        # Fast computation on GPU
         query_features = query_features.to(self.device)
         corpus_features = corpus_features.to(self.device)
         
@@ -450,10 +450,10 @@ def main():
     print(f"Batch size: {args.batch_size}")
     print(f"Output directory: {args.output_dir}")
     
-    # プロセッサを初期化
+    # Initialize processor
     processor = MultiDatasetImageProcessor(model_name=args.model, device=args.device)
     
-    # 特徴量抽出
+    # Feature extraction
     features_file, metadata_file = extract_and_save_features_pytorch(
         processor,
         args.output_dir,
@@ -466,7 +466,7 @@ def main():
         print(f"Features: {features_file}")
         print(f"Metadata: {metadata_file}")
         
-        # 簡単なデモ
+        # Quick demo
         print(f"\n=== Quick Demo ===")
         loader = PyTorchFeatureLoader(features_file, metadata_file, device=args.device)
         print(f"Feature tensor shape: {loader.features.shape}")

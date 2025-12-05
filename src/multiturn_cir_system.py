@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-マルチターンCIRシステム - CIRCO、CIRR、FashionIQに対応
+Multi-turn CIR System - Supports CIRCO, CIRR, and FashionIQ
 """
 
 import os
@@ -31,14 +31,14 @@ import hashlib
 
 warnings.filterwarnings("ignore")
 
-# .envファイルから環境変数を読み込み
+# Load environment variables from .env file
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     print("Warning: python-dotenv not installed. Make sure OPENAI_API_KEY is set as environment variable.")
 
-# OpenAI APIキーの設定
+# Set OpenAI API key
 openai.api_key = os.getenv('OPEN_API_KEY')
 if not openai.api_key:
     raise ValueError("OPEN_API_KEY environment variable is not set. Please set it in .env file or as environment variable.")
@@ -58,20 +58,20 @@ class BlipForRetrieval(BlipForImageTextRetrieval):
         return image_feat
 
 class DatasetLoader:
-    """データセット別のローダークラス"""
+    """Dataset-specific loader class"""
     
     @staticmethod
     def load_circo_data(annotation_file: str) -> List[Dict]:
-        """CIRCOデータを読み込み"""
+        """Load CIRCO data"""
         with open(annotation_file, 'r') as f:
             data = json.load(f)
         
-        # メタデータファイルから画像ID→ハッシュ値のマッピングを作成
+        # Create image ID → hash value mapping from metadata file
         import torch
         metadata_file = 'CIRCO/metadata_blip.pt'
         metadata = torch.load(metadata_file, map_location='cpu', weights_only=False)
         
-        # 画像ID（6桁数値）→ハッシュ値のマッピングを作成
+        # Create image ID (6-digit number) → hash value mapping
         image_id_to_hash = {}
         hash_to_idx = metadata['hash_to_idx']
         idx_to_info = metadata['idx_to_info']
@@ -86,12 +86,12 @@ class DatasetLoader:
         
         formatted_data = []
         for item in data:
-            # 数値IDを6桁文字列に変換してハッシュ値を取得
+            # Convert numeric ID to 6-digit string and get hash value
             ref_id_str = str(item['reference_img_id'])
             target_id_str = str(item['target_img_id'])
             gt_id_strs = [str(gt_id) for gt_id in item['gt_img_ids']]
             
-            # ハッシュ値に変換（見つからない場合は元の12桁形式を保持）
+            # Convert to hash value (keep original 12-digit format if not found)
             ref_hash = image_id_to_hash.get(ref_id_str, f"{item['reference_img_id']:012d}.jpg")
             target_hash = image_id_to_hash.get(target_id_str, f"{item['target_img_id']:012d}.jpg")
             gt_hashes = [image_id_to_hash.get(gt_id_str, f"{int(gt_id_str):012d}.jpg") for gt_id_str in gt_id_strs]
@@ -103,7 +103,7 @@ class DatasetLoader:
                 'ground_truth_ids': gt_hashes,
                 'shared_concept': item.get('shared_concept', ''),
                 'id': item['id'],
-                # デバッグ用に元のIDも保持
+                # Keep original IDs for debugging
                 'original_reference_id': f"{item['reference_img_id']:012d}.jpg",
                 'original_target_id': f"{item['target_img_id']:012d}.jpg",
                 'original_gt_ids': [f"{gt_id:012d}.jpg" for gt_id in item['gt_img_ids']]
@@ -112,112 +112,112 @@ class DatasetLoader:
     
     @staticmethod
     def load_cirr_data(annotation_file: str) -> List[Dict]:
-        """CIRRデータを読み込み（単一のhard targetのみをground truthとする）"""
+        """Load CIRR data (using only single hard target as ground truth)"""
         with open(annotation_file, 'r') as f:
             data = json.load(f)
         
         formatted_data = []
         for item in data:
-            # CIRRは基本的に単一のhard targetを評価対象とする
+            # CIRR basically evaluates against a single hard target
             formatted_data.append({
                 'reference_image_id': item['reference'],
-                'target_image_id': item['target_hard'],  # メインターゲット
+                'target_image_id': item['target_hard'],  # Main target
                 'relative_caption': item['caption'],
-                'ground_truth_ids': [item['target_hard']],  # 単一のhard targetのみ
+                'ground_truth_ids': [item['target_hard']],  # Single hard target only
                 'id': item.get('pairid', item.get('id', 0))
             })
         return formatted_data
     
     @staticmethod
     def load_fashioniq_data(annotation_file: str, caption_mode: str = 'separate') -> List[Dict]:
-        """FashionIQデータを読み込み
-        
+        """Load FashionIQ data
+
         Args:
-            annotation_file: アノテーションファイルのパス
-            caption_mode: キャプション処理方式
-                - 'separate': 各キャプションを独立したサンプルとして扱う（推奨・標準）
-                - 'combined': 複数キャプションを統合
-                - 'first_only': 最初のキャプションのみ使用
+            annotation_file: Path to annotation file
+            caption_mode: Caption processing mode
+                - 'separate': Treat each caption as an independent sample (recommended/standard)
+                - 'combined': Combine multiple captions
+                - 'first_only': Use only the first caption
         """
         with open(annotation_file, 'r') as f:
             data = json.load(f)
         
         formatted_data = []
-        query_id_counter = 0  # 明示的なIDカウンター
+        query_id_counter = 0  # Explicit ID counter
         
-        # 統計情報
+        # Statistics
         total_items = len(data)
         skipped_empty_captions = 0
         skipped_no_valid_captions = 0
         
         for item in data:
-            # 実際のFashion-IQファイル形式に対応
-            target_id = item['target']      # ターゲット画像ID
-            candidate_id = item['candidate'] # 参照画像ID（candidateが実際の参照画像）
-            captions = item['captions']     # relative captions のリスト
+            # Adapt to actual Fashion-IQ file format
+            target_id = item['target']      # Target image ID
+            candidate_id = item['candidate'] # Reference image ID (candidate is the actual reference image)
+            captions = item['captions']     # List of relative captions
             
-            # 空文字列やホワイトスペースのみのキャプションを除外
+            # Exclude empty strings and whitespace-only captions
             valid_captions = [caption.strip() for caption in captions if caption and caption.strip()]
             
-            # 有効なキャプションがない場合はスキップ
+            # Skip if there are no valid captions
             if not valid_captions:
                 skipped_no_valid_captions += 1
                 continue
             
             if caption_mode == 'separate':
-                # 方針1: 各キャプションを独立したサンプルとして扱う（標準アプローチ）
+                # Method 1: Treat each caption as an independent sample (standard approach)
                 for i, caption in enumerate(valid_captions):
                     formatted_data.append({
                         'reference_image_id': candidate_id,
                         'target_image_id': target_id, 
-                        'relative_caption': caption,  # 個別のキャプション（空文字列除外済み）
+                        'relative_caption': caption,  # Individual caption (empty strings excluded)
                         'ground_truth_ids': [target_id],
-                        'id': query_id_counter,  # 明示的なIDを設定
-                        'caption_index': i,  # どのキャプションかを記録
-                        'original_captions': captions,  # 元のキャプション（フィルタ前）
-                        'valid_captions': valid_captions  # 有効なキャプションのみ
+                        'id': query_id_counter,  # Set explicit ID
+                        'caption_index': i,  # Record which caption this is
+                        'original_captions': captions,  # Original captions (before filtering)
+                        'valid_captions': valid_captions  # Valid captions only
                     })
                     query_id_counter += 1
                     
             elif caption_mode == 'combined':
-                # 方針2: 複数キャプションを自然な文章として統合
+                # Method 2: Combine multiple captions as natural text
                 if len(valid_captions) == 1:
                     combined_caption = valid_captions[0]
                 elif len(valid_captions) == 2:
                     combined_caption = f"{valid_captions[0]} and {valid_captions[1]}"
                 else:
-                    # 3つ以上の場合（稀）
+                    # For 3 or more captions (rare)
                     combined_caption = ", ".join(valid_captions[:-1]) + f", and {valid_captions[-1]}"
                 
                 formatted_data.append({
                     'reference_image_id': candidate_id,
                     'target_image_id': target_id, 
-                    'relative_caption': combined_caption,  # 統合されたキャプション
+                    'relative_caption': combined_caption,  # Combined caption
                     'ground_truth_ids': [target_id],
-                    'id': query_id_counter,  # 明示的なIDを設定
-                    'original_captions': captions,  # 元のキャプション（フィルタ前）
-                    'valid_captions': valid_captions  # 有効なキャプションのみ
+                    'id': query_id_counter,  # Set explicit ID
+                    'original_captions': captions,  # Original captions (before filtering)
+                    'valid_captions': valid_captions  # Valid captions only
                 })
                 query_id_counter += 1
                 
             elif caption_mode == 'first_only':
-                # 方針3: 最初の有効なキャプションのみ使用
+                # Method 3: Use only the first valid caption
                 formatted_data.append({
                     'reference_image_id': candidate_id,
                     'target_image_id': target_id, 
-                    'relative_caption': valid_captions[0],  # 最初の有効なキャプションのみ
+                    'relative_caption': valid_captions[0],  # Only the first valid caption
                     'ground_truth_ids': [target_id],
-                    'id': query_id_counter,  # 明示的なIDを設定
-                    'original_captions': captions,  # 元のキャプション（フィルタ前）
-                    'valid_captions': valid_captions  # 有効なキャプションのみ
+                    'id': query_id_counter,  # Set explicit ID
+                    'original_captions': captions,  # Original captions (before filtering)
+                    'valid_captions': valid_captions  # Valid captions only
                 })
                 query_id_counter += 1
             
-            # 空文字列キャプションがあった場合の統計
+            # Statistics for empty string captions
             if len(valid_captions) < len(captions):
                 skipped_empty_captions += len(captions) - len(valid_captions)
         
-        # デバッグ情報の表示
+        # Display debug information
         print(f"Fashion-IQ data loading summary:")
         print(f"  Total annotation items: {total_items}")
         print(f"  Items with no valid captions (skipped): {skipped_no_valid_captions}")
@@ -228,16 +228,16 @@ class DatasetLoader:
         return formatted_data
 
 class ModelManager:
-    """モデル管理クラス"""
+    """Model management class"""
     
     def __init__(self, use_blip: bool = True):
         self.use_blip = use_blip
         self.load_retrieval_models()
-        self.load_clip_model()  # CLIP類似度チェック用
+        self.load_clip_model()  # For CLIP similarity checking
         self.setup_openai_client()
     
     def load_retrieval_models(self):
-        """検索用モデルをロード"""
+        """Load retrieval models"""
         if self.use_blip:
             self.retrieval_model = BlipForRetrieval.from_pretrained("Salesforce/blip-itm-large-coco")
             self.retrieval_processor = AutoProcessor.from_pretrained("Salesforce/blip-itm-large-coco")
@@ -253,7 +253,7 @@ class ModelManager:
             )
     
     def load_clip_model(self):
-        """CLIP類似度チェック用モデルをロード"""
+        """Load CLIP model for similarity checking"""
         try:
             import clip
             self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=device)
@@ -268,20 +268,20 @@ class ModelManager:
             self.clip_preprocess = None
     
     def setup_openai_client(self):
-        """OpenAI APIクライアントの設定"""
-        # OpenAI APIキーが設定されていることを確認
+        """Setup OpenAI API client"""
+        # Verify that OpenAI API key is set
         if not openai.api_key:
             raise ValueError("OpenAI API key is not set. Please set OPENAI_API_KEY environment variable.")
         
         print("OpenAI GPT-4o-mini client ready for caption generation")
     
     async def encode_image_to_base64(self, image_path: str) -> str:
-        """画像をBase64エンコードする"""
+        """Encode image to Base64"""
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
     
     async def call_gpt4o_mini(self, messages: List[Dict], max_tokens: int = 100) -> str:
-        """GPT-4o-miniにAPIコールする"""
+        """Make API call to GPT-4o-mini"""
         client = AsyncOpenAI(api_key=openai.api_key)
         
         response = await client.chat.completions.create(
@@ -293,7 +293,7 @@ class ModelManager:
         return response.choices[0].message.content.strip()
 
     async def combine_captions_with_gpt4o(self, original_caption: str, relative_caption: str) -> str:
-        """GPT-4o-miniを使ってキャプションを組み合わせ"""
+        """Combine captions using GPT-4o-mini"""
         messages = [
             {
                 "role": "system",
@@ -307,10 +307,10 @@ class ModelManager:
         
         response = await self.call_gpt4o_mini(messages, max_tokens=50)
         
-        # 不要な接頭語や冗長な表現を除去
+        # Remove unnecessary prefixes and redundant expressions
         response = response.strip()
         
-        # より包括的な不要接頭語リスト
+        # More comprehensive list of unwanted prefixes
         unwanted_prefixes = [
             "Comprehensive Caption:",
             "New caption:",
@@ -330,20 +330,20 @@ class ModelManager:
         
         return response.strip()
 
-    async def generate_relative_caption_with_gpt4o(self, ref_image_path: str, target_image_path: str, 
-                                                  previous_captions: List[str] = None, 
+    async def generate_relative_caption_with_gpt4o(self, ref_image_path: str, target_image_path: str,
+                                                  previous_captions: List[str] = None,
                                                   similarity_threshold: float = 0.8,
                                                   max_retries: int = 3) -> str:
-        """GPT-4o-miniを使ってrelative captionを生成（CLIP類似度チェック付き）"""
+        """Generate relative caption using GPT-4o-mini (with CLIP similarity checking)"""
         if not os.path.exists(ref_image_path):
             raise FileNotFoundError(f"Reference image file not found: {ref_image_path}")
         if not os.path.exists(target_image_path):
             raise FileNotFoundError(f"Target image file not found: {target_image_path}")
         
-        # CLIPモデルが利用できない場合は通常の生成のみ実行
+        # If CLIP model is not available, only perform regular generation
         if not (hasattr(self, 'clip_model') and self.clip_model is not None):
             print("CLIP model not available. Skipping similarity check.")
-            # 通常のrelative caption生成（既存のループ処理の中核部分を使用）
+            # Regular relative caption generation (using core part of existing loop processing)
             ref_image_b64 = await self.encode_image_to_base64(ref_image_path)
             target_image_b64 = await self.encode_image_to_base64(target_image_path)
             
@@ -383,12 +383,12 @@ class ModelManager:
             ]
             
             generated_caption = await self.call_gpt4o_mini(messages, max_tokens=60)
-            # 引用符や余分な文字を除去
+            # Remove quotes and extra characters
             return generated_caption.strip('"\'')
-        
-        # CLIP特徴量計算用の関数
+
+        # Function for CLIP feature computation
         def get_clip_text_feature(text: str) -> torch.Tensor:
-            """CLIPテキスト特徴量を取得"""
+            """Get CLIP text features"""
             import clip
             device = next(self.clip_model.parameters()).device
             with torch.no_grad():
@@ -396,7 +396,7 @@ class ModelManager:
                 feat = self.clip_model.encode_text(tokens)
                 return torch.nn.functional.normalize(feat, dim=-1).squeeze(0)
         
-        # 過去のキャプションの特徴量を計算
+        # Compute features for previous captions
         previous_features = []
         if previous_captions:
             for caption in previous_captions:
@@ -404,13 +404,13 @@ class ModelManager:
                     feat = get_clip_text_feature(caption)
                     previous_features.append(feat)
         
-        # 画像をBase64エンコード
+        # Encode images to Base64
         ref_image_b64 = await self.encode_image_to_base64(ref_image_path)
         target_image_b64 = await self.encode_image_to_base64(target_image_path)
         
-        # 再試行ループ
+        # Retry loop
         for attempt in range(max_retries):
-            # 前回のキャプションがある場合の指示
+            # Instructions when previous captions exist
             previous_instructions = ""
             if previous_captions and len(previous_captions) > 0:
                 previous_instructions = (
@@ -420,7 +420,7 @@ class ModelManager:
                     "Focus on aspects that have NOT been mentioned before.\n\n"
                 )
             
-            # 再試行の場合の追加指示
+            # Additional instructions for retries
             retry_instructions = ""
             if attempt > 0:
                 retry_instructions = (
@@ -473,19 +473,19 @@ class ModelManager:
             
             generated_caption = await self.call_gpt4o_mini(messages, max_tokens=60)
             
-            # 引用符や余分な文字を除去
+            # Remove quotes and extra characters
             generated_caption = generated_caption.strip('"\'')
-            
+
             if not generated_caption:
                 if attempt == max_retries - 1:
                     raise ValueError(f"GPT-4o generated empty caption after {max_retries} attempts for images: {ref_image_path}, {target_image_path}")
                 continue
             
-            # CLIP類似度チェック
+            # CLIP similarity check
             if previous_features:
                 current_feature = get_clip_text_feature(generated_caption)
                 
-                # 過去のキャプションとの類似度を計算
+                # Calculate similarity with previous captions
                 is_too_similar = False
                 max_similarity = 0.0
                 
@@ -497,7 +497,7 @@ class ModelManager:
                         is_too_similar = True
                         break
                 
-                # 類似度が閾値以下の場合は成功
+                # Success if similarity is below threshold
                 if not is_too_similar:
                     if attempt > 0:
                         print(f"  ✓ Generated distinctive caption after {attempt + 1} attempts (max similarity: {max_similarity:.3f})")
@@ -508,51 +508,51 @@ class ModelManager:
                         print(f"  ⚠ Using similar caption after {max_retries} attempts: '{generated_caption}'")
                         return generated_caption
             else:
-                # 過去のキャプションがない場合はそのまま返す
+                # Return as-is if there are no previous captions
                 return generated_caption
-        
-        # ここには到達しないはずだが、安全のため
+
+        # Should not reach here, but for safety
         return generated_caption
 
 class RetrievalEngine:
-    """画像検索エンジン"""
-    
+    """Image retrieval engine"""
+
     def __init__(self, corpus_vectors_file: str, search_space_file: str, model_manager: ModelManager):
-        # 特徴量ファイルの存在確認
+        # Check if feature file exists
         if not os.path.exists(corpus_vectors_file):
             raise FileNotFoundError(f"Corpus vectors file not found: {corpus_vectors_file}")
         
-        # 特徴量ファイルを読み込み
+        # Load feature file
         corpus_data = torch.load(corpus_vectors_file, map_location=device, weights_only=False)
         
-        # 特徴量ファイルの形式に応じて処理
+        # Process according to feature file format
         if isinstance(corpus_data, dict):
-            # 辞書形式の場合：{'features': tensor, 'hashes': list, ...}
+            # Dictionary format: {'features': tensor, 'hashes': list, ...}
             if 'features' in corpus_data and 'hashes' in corpus_data:
                 all_corpus_features = corpus_data['features']
                 all_corpus_ids = corpus_data['hashes']
             else:
                 raise ValueError(f"Expected 'features' and 'hashes' keys in corpus file: {corpus_vectors_file}")
         elif isinstance(corpus_data, (tuple, list)) and len(corpus_data) == 2:
-            # タプル形式の場合：(corpus_ids, corpus_features)
+            # Tuple format: (corpus_ids, corpus_features)
             all_corpus_ids, all_corpus_features = corpus_data
         else:
             raise ValueError(f"Unsupported corpus vectors format in file: {corpus_vectors_file}")
         
-        # 検索空間ファイルの存在確認
+        # Check if search space file exists
         if not os.path.exists(search_space_file):
             raise FileNotFoundError(f"Search space file not found: {search_space_file}")
         
-        # 検索空間ファイルの形式に応じて読み込み方法を変更
+        # Change loading method according to search space file format
         if search_space_file.endswith('.pt'):
-            # PyTorchファイルの場合（メタデータファイル）
+            # For PyTorch files (metadata files)
             metadata = torch.load(search_space_file, map_location='cpu', weights_only=False)
             if isinstance(metadata, dict) and 'image_ids' in metadata:
                 self.search_space = metadata['image_ids']
             elif isinstance(metadata, dict) and 'idx_to_info' in metadata:
-                # CIRCOの場合：メタデータファイルから画像IDを抽出
+                # For CIRCO: Extract image IDs from metadata file
                 idx_to_info = metadata['idx_to_info']
-                # CIRCOの場合はhash_to_idxからハッシュを取得（コーパスのIDと一致）
+                # For CIRCO, get hash from hash_to_idx (matches corpus ID)
                 if 'circo' in search_space_file.lower() and 'hash_to_idx' in metadata:
                     self.search_space = list(metadata['hash_to_idx'].keys())
                     print(f"Extracted {len(self.search_space)} image hashes from CIRCO metadata")
@@ -562,34 +562,34 @@ class RetrievalEngine:
             elif isinstance(metadata, list):
                 self.search_space = metadata
             else:
-                # メタデータから画像IDを抽出
+                # Extract image IDs from metadata
                 self.search_space = list(metadata.keys()) if isinstance(metadata, dict) else metadata
         else:
-            # JSONファイルの場合
+            # For JSON files
             with open(search_space_file, 'r') as f:
                 search_data = json.load(f)
                 if isinstance(search_data, dict):
-                    # 辞書形式の場合、キーのリストを取得（CIRRの場合）
+                    # For dictionary format, get list of keys (for CIRR)
                     self.search_space = list(search_data.keys())
-                    # 値も保持（相対パス情報）
+                    # Also keep values (relative path information)
                     self.search_space_paths = search_data
                 else:
-                    # リスト形式の場合
+                    # For list format
                     self.search_space = search_data
                     self.search_space_paths = None
         
-        # 検索空間が空でないことを確認
+        # Verify that search space is not empty
         if not self.search_space:
             raise ValueError(f"Search space is empty. Check file: {search_space_file}")
         
-        # 検索空間に含まれる画像の特徴量のみを抽出
+        # Extract only features for images in search space
         valid_indices = []
         self.corpus_ids = []
-        self.search_space_filtered = []  # 実際に存在する画像のみ
+        self.search_space_filtered = []  # Only images that actually exist
         
         print(f"Filtering features for search space ({len(self.search_space)} images)...")
         
-        # 画像ディレクトリを設定（データセット別）
+        # Set image directory (per dataset)
         if 'fashion-iq' in corpus_vectors_file.lower():
             image_base_dir = 'fashion-iq/images'
         elif 'cirr' in corpus_vectors_file.lower():
@@ -597,18 +597,18 @@ class RetrievalEngine:
         elif 'circo' in corpus_vectors_file.lower():
             image_base_dir = 'CIRCO/COCO2017_unlabeled/unlabeled2017'
         else:
-            image_base_dir = ''  # フォールバック
+            image_base_dir = ''  # Fallback
         
         def check_image_file_exists(image_id: str, image_path: str = None) -> bool:
-            """画像ファイルが実際に存在するかチェック"""
+            """Check if image file actually exists"""
             if not image_base_dir:
-                return True  # ディレクトリが不明な場合はスキップ
-                
-            # メタデータのimage_pathが利用可能な場合はそれを使用
+                return True  # Skip if directory is unknown
+
+            # Use metadata image_path if available
             if image_path and os.path.exists(image_path):
                 return True
                 
-            # FashionIQの場合はカテゴリ別ディレクトリ
+            # For FashionIQ, use category-specific directories
             if 'fashion-iq' in corpus_vectors_file.lower():
                 for category in ['dress', 'shirt', 'toptee']:
                     image_path = os.path.join(image_base_dir, category, f"{image_id}.jpg")
@@ -616,18 +616,18 @@ class RetrievalEngine:
                         return True
                 return False
             elif 'cirr' in corpus_vectors_file.lower():
-                # CIRRの場合：splitによって構造が異なる
-                # train: 階層構造（0-99のサブディレクトリ）
-                # val, dev, test1: フラット構造（直下にファイル）
-                
-                # trainの場合：階層構造
-                for subdir in range(100):  # 0-99のサブディレクトリを検索
+                # For CIRR: Structure differs by split
+                # train: Hierarchical structure (0-99 subdirectories)
+                # val, dev, test1: Flat structure (files directly under)
+
+                # For train: Hierarchical structure
+                for subdir in range(100):  # Search 0-99 subdirectories
                     for ext in ['.jpg', '.jpeg', '.png']:
                         image_path = os.path.join(image_base_dir, 'train', str(subdir), f"{image_id}{ext}")
                         if os.path.exists(image_path):
                             return True
                 
-                # val, dev, test1の場合：フラット構造
+                # For val, dev, test1: Flat structure
                 for split in ['val', 'dev', 'test1']:
                     for ext in ['.png', '.jpg', '.jpeg']:
                         image_path = os.path.join(image_base_dir, split, f"{image_id}{ext}")
@@ -636,30 +636,30 @@ class RetrievalEngine:
                 
                 return False
             else:
-                # CIRCOの場合（image_idを12桁ゼロパディング形式に変換）
+                # For CIRCO (convert image_id to 12-digit zero-padded format)
                 if image_path and os.path.exists(image_path):
                     return True
                 
-                # image_idを12桁ゼロパディング形式のファイル名に変換
+                # Convert image_id to 12-digit zero-padded filename
                 padded_filename = f"{int(image_id):012d}.jpg"
                 image_path = os.path.join(image_base_dir, padded_filename)
                 return os.path.exists(image_path)
         
-        # 統一的なアプローチ：メタデータファイルを優先し、なければ直接照合
+        # Unified approach: Prioritize metadata file, fallback to direct matching
         metadata_file = corpus_vectors_file.replace('features_', 'metadata_')
         use_metadata = False
         
-        # CIRCOの場合、search_space_fileがメタデータファイルと同じ場合がある
+        # For CIRCO, search_space_file may be the same as metadata file
         if 'circo' in corpus_vectors_file.lower() and search_space_file == metadata_file:
-            # CIRCOの場合、検索空間とメタデータが同じファイル
+            # For CIRCO, search space and metadata are the same file
             use_metadata = True
             metadata = torch.load(metadata_file, map_location='cpu', weights_only=False)
             
-            # CIRCOの場合のメタデータ処理
+            # CIRCO metadata processing
             matched_count = 0
-            search_space_set = set(self.search_space)  # 高速検索用
-            
-            # 特徴量ファイルのhash_to_idxを使用（これが実際の特徴量配列のインデックス）
+            search_space_set = set(self.search_space)  # For fast lookup
+
+            # Use hash_to_idx from feature file (this is the actual feature array index)
             if isinstance(corpus_data, dict) and 'hash_to_idx' in corpus_data:
                 features_hash_to_idx = corpus_data['hash_to_idx']
                 
@@ -667,23 +667,23 @@ class RetrievalEngine:
                     if hash_val in features_hash_to_idx:
                         corpus_idx = features_hash_to_idx[hash_val]
                         
-                        # メタデータから画像情報を取得（存在チェック用）
+                        # Get image information from metadata (for existence check)
                         if 'hash_to_idx' in metadata and hash_val in metadata['hash_to_idx']:
                             metadata_idx = metadata['hash_to_idx'][hash_val]
                             info = metadata['idx_to_info'].get(metadata_idx, {})
                             image_id = info.get('image_id', '')
                             image_path = info.get('image_path', '')
                             
-                            # 画像ファイルの存在チェック
+                            # Check if image file exists
                             file_exists = check_image_file_exists(image_id, image_path)
-                            
+
                             if file_exists:
                                 valid_indices.append(corpus_idx)
                                 self.corpus_ids.append(all_corpus_ids[corpus_idx])
-                                self.search_space_filtered.append(hash_val)  # ハッシュを使用
+                                self.search_space_filtered.append(hash_val)  # Use hash
                                 matched_count += 1
                         else:
-                            # メタデータにない場合でも、特徴量が存在すれば使用
+                            # Use even if not in metadata, as long as features exist
                             valid_indices.append(corpus_idx)
                             self.corpus_ids.append(all_corpus_ids[corpus_idx])
                             self.search_space_filtered.append(hash_val)
@@ -691,14 +691,14 @@ class RetrievalEngine:
 
             print(f"Successfully matched {matched_count} images using CIRCO metadata")
         
-        # CIRRの場合、メタデータファイルを使用して対応付け
+        # For CIRR, use metadata file for matching
         elif 'cirr' in corpus_vectors_file.lower() and os.path.exists(metadata_file):
             use_metadata = True
             metadata = torch.load(metadata_file, map_location='cpu', weights_only=False)
             
-            # CIRRの場合のメタデータ処理
+            # CIRR metadata processing
             matched_count = 0
-            search_space_set = set(self.search_space)  # 高速検索用
+            search_space_set = set(self.search_space)  # For fast lookup
             
             if 'idx_to_info' in metadata:
                 idx_to_info = metadata['idx_to_info']
@@ -706,27 +706,27 @@ class RetrievalEngine:
                     image_id = info.get('image_id', '')
                     image_path = info.get('image_path', '')
                     
-                    # 検索空間に含まれているかチェック
+                    # Check if in search space
                     if image_id in search_space_set:
-                        # 画像ファイルの存在チェック
+                        # Check if image file exists
                         file_exists = check_image_file_exists(image_id, image_path)
-                        
+
                         if file_exists and idx < len(all_corpus_ids):
                             valid_indices.append(idx)
                             self.corpus_ids.append(all_corpus_ids[idx])
                             self.search_space_filtered.append(image_id)
                             matched_count += 1
-            
+
             print(f"Successfully matched {matched_count} images using CIRR metadata")
-        
-        # FashionIQの場合、メタデータファイルを使用して対応付け
+
+        # For FashionIQ, use metadata file for matching
         elif 'fashion-iq' in corpus_vectors_file.lower() and os.path.exists(metadata_file):
             use_metadata = True
             metadata = torch.load(metadata_file, map_location='cpu', weights_only=False)
             
-            # FashionIQの場合のメタデータ処理
+            # FashionIQ metadata processing
             matched_count = 0
-            search_space_set = set(self.search_space)  # 高速検索用
+            search_space_set = set(self.search_space)  # For fast lookup
             
             if 'idx_to_info' in metadata:
                 idx_to_info = metadata['idx_to_info']
@@ -734,26 +734,26 @@ class RetrievalEngine:
                     image_id = info.get('image_id', '')
                     image_path = info.get('image_path', '')
                     
-                    # 検索空間に含まれているかチェック（商品IDベース）
+                    # Check if in search space (based on product ID)
                     if image_id in search_space_set:
-                        # 画像ファイルの存在チェック
+                        # Check if image file exists
                         file_exists = check_image_file_exists(image_id, image_path)
-                        
+
                         if file_exists and idx < len(all_corpus_ids):
                             valid_indices.append(idx)
                             self.corpus_ids.append(all_corpus_ids[idx])
-                            self.search_space_filtered.append(image_id)  # 商品IDを使用
+                            self.search_space_filtered.append(image_id)  # Use product ID
                             matched_count += 1
             
             print(f"Successfully matched {matched_count} images using FashionIQ metadata")
         
         if not use_metadata:
-            # 直接画像ID照合（メタデータファイルがない場合）
+            # Direct image ID matching (when metadata file is not available)
             print("Using direct image ID matching")
             for search_img_id in self.search_space:
-                # 画像ファイルの存在をまずチェック
+                # First check if image file exists
                 if '/' in search_img_id:
-                    # 相対パス形式の場合、ファイル名部分を抽出
+                    # For relative path format, extract filename part
                     base_id = search_img_id.split('/')[-1]
                     if '.' in base_id:
                         base_id = base_id.rsplit('.', 1)[0]
@@ -761,12 +761,12 @@ class RetrievalEngine:
                     base_id = search_img_id.rsplit('.', 1)[0] if '.' in search_img_id else search_img_id
                 
                 if not check_image_file_exists(base_id):
-                    continue  # 画像ファイルが存在しない場合はスキップ
-                
-                # 拡張子の有無を考慮した候補リストを作成
+                    continue  # Skip if image file does not exist
+
+                # Create candidate list considering extension presence
                 search_candidates = [search_img_id]
                 
-                # CIRRの場合、相対パスからファイル名を抽出した候補も追加
+                # For CIRR, also add candidates with filename extracted from relative path
                 if 'cirr' in corpus_vectors_file.lower() and '/' in search_img_id:
                     filename = search_img_id.split('/')[-1]
                     search_candidates.append(filename)
@@ -778,7 +778,7 @@ class RetrievalEngine:
                 if search_img_id.endswith(('.png', '.jpg', '.jpeg')):
                     search_candidates.append(search_img_id.rsplit('.', 1)[0])
                 
-                # 特徴量ファイル内で照合
+                # Match within feature file
                 found_idx = None
                 for candidate in search_candidates:
                     for idx, corpus_id in enumerate(all_corpus_ids):
@@ -798,7 +798,7 @@ class RetrievalEngine:
                            f"Search space sample: {self.search_space[:5]}, "
                            f"Corpus sample: {all_corpus_ids[:5]}")
         
-        # 検索空間に対応する特徴量のみを抽出
+        # Extract only features corresponding to search space
         self.corpus_features = all_corpus_features[valid_indices]
         
         print(f"Filtered corpus: {len(self.corpus_ids)} images (from {len(all_corpus_ids)} total)")
@@ -806,28 +806,28 @@ class RetrievalEngine:
         self.model_manager = model_manager
     
     def search_images(self, query_features: torch.Tensor) -> List[Tuple[str, float]]:
-        """画像検索を実行"""
+        """Execute image search"""
         corpus_ids, corpus_features = self.corpus_ids, self.corpus_features
         
-        # クエリ特徴量を正規化
+        # Normalize query features
         query_features = normalize(query_features, dim=-1)
         corpus_features = normalize(corpus_features, dim=-1)
         
-        # コサイン類似度を計算
+        # Calculate cosine similarity
         similarities = (query_features @ corpus_features.T).squeeze(0).cpu().numpy()
         
-        # 検索結果を作成（フィルタリング済み検索空間を使用）
+        # Create search results (using filtered search space)
         image_similarities = [
             (self.search_space_filtered[index], similarities[index]) 
             for index in range(len(corpus_ids))
         ]
         
-        # 類似度順にソート
+        # Sort by similarity
         images = sorted(image_similarities, key=lambda x: x[1], reverse=True)
         return images
     
     def get_image_features(self, image_id: str) -> torch.Tensor:
-        """特定の画像の特徴量を取得"""
+        """Get features for a specific image"""
         corpus_ids, corpus_features = self.corpus_ids, self.corpus_features
         
         if image_id not in self.search_space_filtered:
@@ -837,27 +837,27 @@ class RetrievalEngine:
         index = self.search_space_filtered.index(image_id)
         return corpus_features[index].clone().detach().to(device)
     
-    def update_query_with_feedback(self, current_query: torch.Tensor, selected_img: str, 
+    def update_query_with_feedback(self, current_query: torch.Tensor, selected_img: str,
                                  unselected_imgs: List[str], new_text_query: str,
                                  alpha: float = 0.08, beta: float = 0.29, gamma: float = 0.44) -> torch.Tensor:
-        """フィードバックを使ってクエリを更新"""
+        """Update query using feedback"""
         with torch.no_grad():
             text_features = self.model_manager.dialog_encoder(new_text_query)
         
-        # 特徴量を正規化
+        # Normalize features
         text_features = normalize(text_features, dim=-1)
         current_query = normalize(current_query, dim=-1)
-        
-        # 選択された画像の特徴量
+
+        # Features of selected image
         selected_features = normalize(self.get_image_features(selected_img), dim=-1)
         
-        # 未選択画像の特徴量
+        # Features of unselected images
         unselected_features = torch.stack([
             self.get_image_features(img_id) for img_id in unselected_imgs
         ])
         unselected_features = normalize(unselected_features, dim=-1)
         
-        # クエリを更新
+        # Update query
         updated_query = (
             current_query + 
             gamma * text_features + 
@@ -868,20 +868,20 @@ class RetrievalEngine:
         return normalize(updated_query, dim=-1)
 
 class MultiTurnCIRSystem:
-    """マルチターンCIRシステムのメインクラス"""
-    
+    """Main class for multi-turn CIR system"""
+
     def __init__(self, dataset_name: str, config: Dict[str, Any]):
-        """初期化"""
+        """Initialize"""
         self.dataset_name = dataset_name
         self.config = config
         self.max_turns = config.get('max_turns', 5)
         self.results = []
         self.completeness_info = {}
         
-        # max_turnsの設定値をログ出力
+        # Log max_turns setting
         print(f"Initializing {dataset_name} with max_turns = {self.max_turns}")
-        
-        # CIRCOの場合、ハッシュ→画像ファイル名のマッピングを作成
+
+        # For CIRCO, create hash → image filename mapping
         self.hash_to_filename = {}
         if dataset_name == 'circo':
             import torch
@@ -899,11 +899,11 @@ class MultiTurnCIRSystem:
             
             print(f"Created hash to filename mapping for {len(self.hash_to_filename)} images")
         
-        # 画像ID→ハッシュ値のマッピングを初期化
+        # Initialize image ID → hash value mapping
         self.image_id_to_hash = {}
         self._initialize_image_hash_mapping()
         
-        # モデルマネージャーとリトリーバルエンジンを初期化
+        # Initialize model manager and retrieval engine
         self.model_manager = ModelManager(use_blip=config.get('use_blip', True))
         self.retrieval_engine = RetrievalEngine(
             config['corpus_vectors_file'], 
@@ -911,40 +911,40 @@ class MultiTurnCIRSystem:
             self.model_manager
         )
         
-        # データとキャプション特徴量を読み込み
+        # Load data and caption features
         self.data = self.load_dataset()
         self.reference_captions = self.load_reference_captions()
         self.caption_features = self.load_caption_features()
         
-        # 既存結果を読み込み（再開モード対応）
+        # Load existing results (for resume mode)
         self.load_existing_results()
     
     def _initialize_image_hash_mapping(self):
-        """画像ID→ハッシュ値のマッピングを初期化"""
+        """Initialize image ID → hash value mapping"""
         print("Initializing image ID to hash mapping...")
         
         if self.dataset_name == 'circo':
-            # CIRCOの場合、既存のhash_to_filenameから逆マッピングを作成
+            # For CIRCO, create reverse mapping from existing hash_to_filename
             for hash_val, filename in self.hash_to_filename.items():
-                # ファイル名から画像IDを抽出（例：000000000001.jpg → 1）
+                # Extract image ID from filename (e.g., 000000000001.jpg → 1)
                 image_id = filename.replace('.jpg', '').lstrip('0') or '0'
                 self.image_id_to_hash[image_id] = hash_val
-                # 12桁形式も追加
+                # Also add 12-digit format
                 padded_id = f"{int(image_id):012d}"
                 self.image_id_to_hash[padded_id] = hash_val
         
         elif self.dataset_name.startswith('cirr'):
-            # CIRRの場合、実際の画像ファイルからハッシュを計算
+            # For CIRR, compute hash from actual image files
             self._compute_cirr_image_hashes()
         
         elif self.dataset_name.startswith('fashioniq'):
-            # FashionIQの場合、実際の画像ファイルからハッシュを計算
+            # For FashionIQ, compute hash from actual image files
             self._compute_fashioniq_image_hashes()
         
         print(f"Created image ID to hash mapping for {len(self.image_id_to_hash)} images")
     
     def _compute_image_hash(self, image_path: str) -> str:
-        """画像ファイルのMD5ハッシュを計算"""
+        """Compute MD5 hash of image file"""
         try:
             with open(image_path, 'rb') as f:
                 file_hash = hashlib.md5(f.read()).hexdigest()
@@ -954,10 +954,10 @@ class MultiTurnCIRSystem:
             return None
     
     def _compute_cirr_image_hashes(self):
-        """CIRR画像のハッシュ値を計算"""
+        """Compute hash values for CIRR images"""
         image_dir = self.config.get('image_dir', 'cirr/img_raw')
-        
-        # スプリットファイルから画像IDを取得
+
+        # Get image IDs from split file
         splits = ['train', 'val', 'test1']
         for split in splits:
             split_file = f'cirr/image_splits/split.rc2.{split}.json'
@@ -966,7 +966,7 @@ class MultiTurnCIRSystem:
                     split_data = json.load(f)
                 
                 for image_id, relative_path in split_data.items():
-                    # relative_pathは "./train/34/train-11041-2-img0.png" のような形式
+                    # relative_path is in format like "./train/34/train-11041-2-img0.png"
                     full_path = os.path.join(image_dir, relative_path.lstrip('./'))
                     
                     if os.path.exists(full_path):
@@ -975,11 +975,11 @@ class MultiTurnCIRSystem:
                             self.image_id_to_hash[image_id] = img_hash
     
     def _compute_fashioniq_image_hashes(self):
-        """FashionIQ画像のハッシュ値を計算"""
+        """Compute hash values for FashionIQ images"""
         image_dir = self.config.get('image_dir', 'fashion-iq/images')
         category = self.dataset_name.split('_')[1] if '_' in self.dataset_name else 'dress'
-        
-        # スプリットファイルから画像IDを取得
+
+        # Get image IDs from split file
         splits = ['train', 'val', 'test']
         for split in splits:
             split_file = f'fashion-iq/image_splits/split.{category}.{split}.json'
@@ -994,16 +994,16 @@ class MultiTurnCIRSystem:
                         img_hash = self._compute_image_hash(image_path)
                         if img_hash:
                             self.image_id_to_hash[image_id] = img_hash
-                            # 拡張子付きバージョンも追加
+                            # Also add version with extension
                             self.image_id_to_hash[f"{image_id}.jpg"] = img_hash
     
     def get_image_hash(self, image_id: str) -> str:
-        """画像IDからハッシュ値を取得"""
-        # 直接マッピングから取得
+        """Get hash value from image ID"""
+        # Get from direct mapping
         if image_id in self.image_id_to_hash:
             return self.image_id_to_hash[image_id]
         
-        # FashionIQの場合、拡張子の有無を考慮
+        # For FashionIQ, consider presence of extension
         if self.dataset_name.startswith('fashioniq'):
             if image_id.endswith('.jpg'):
                 base_id = image_id[:-4]
@@ -1014,7 +1014,7 @@ class MultiTurnCIRSystem:
                 if jpg_id in self.image_id_to_hash:
                     return self.image_id_to_hash[jpg_id]
         
-        # CIRCOの場合、12桁形式も試す
+        # For CIRCO, also try 12-digit format
         if self.dataset_name == 'circo':
             try:
                 padded_id = f"{int(image_id):012d}"
@@ -1026,7 +1026,7 @@ class MultiTurnCIRSystem:
         return None
     
     def load_existing_results(self) -> None:
-        """既存の結果ファイルを読み込んで再開準備"""
+        """Load existing results file for resume preparation"""
         output_file = f"multiturn_cir_results_{self.dataset_name}.json"
         
         if os.path.exists(output_file):
@@ -1037,11 +1037,11 @@ class MultiTurnCIRSystem:
                 if 'results' in existing_data:
                     self.results = existing_data['results']
                     
-                    # Fashion-IQでcaption_mode=separateの場合は3つ組みで照合
+                    # For Fashion-IQ with caption_mode=separate, match using triplets
                     if self.dataset_name.startswith('fashioniq') and self.config.get('caption_mode') == 'separate':
                         processed_query_triplets = set()
                         
-                        # 処理済みクエリを(reference_id, target_id, relative_caption)の組み合わせで管理
+                        # Manage processed queries by (reference_id, target_id, relative_caption) combination
                         for result in self.results:
                             ref_id = result.get('reference_image_id', '')
                             target_id = result.get('target_image_id', '')
@@ -1053,18 +1053,18 @@ class MultiTurnCIRSystem:
                         print(f"Found existing results file with {len(self.results)} processed queries")
                         print(f"Processed query triplets (ref, target, caption): {len(processed_query_triplets)}")
                         
-                        # 未処理のクエリのみを残す
+                        # Keep only unprocessed queries
                         original_data_count = len(self.data)
                         remaining_data = []
-                        
+
                         for query_item in self.data:
-                            # 現在のクエリの(reference_id, target_id, relative_caption)の3つ組みを取得
+                            # Get current query's (reference_id, target_id, relative_caption) triplet
                             ref_id = query_item['reference_image_id']
                             target_id = query_item['target_image_id']
                             relative_caption = query_item['relative_caption']
                             query_triplet = (ref_id, target_id, relative_caption)
                             
-                            # この3つ組みが処理済みでない場合のみ残す
+                            # Keep only if this triplet has not been processed
                             if query_triplet not in processed_query_triplets:
                                 remaining_data.append(query_item)
                         
@@ -1074,18 +1074,18 @@ class MultiTurnCIRSystem:
                         print(f"Remaining queries to process: {len(remaining_data)}")
                         
                     elif self.dataset_name == 'circo':
-                        # CIRCOの特別処理：reference_id + 複数ground_truthsで照合
+                        # Special handling for CIRCO: match by reference_id + multiple ground_truths
                         processed_query_signatures = set()
                         
-                        # 保存された結果から処理済みクエリを特定
+                        # Identify processed queries from saved results
                         for result in self.results:
-                            # 保存時にはハッシュ値→12桁IDに変換されているため、
-                            # current dataのoriginal_*_idと照合
-                            ref_id = result.get('reference_image_id', '')  # 12桁ID形式
-                            gt_ids = result.get('ground_truth_ids', [])    # 12桁ID形式のリスト
+                            # Since hash values are converted to 12-digit IDs when saving,
+                            # match with original_*_id in current data
+                            ref_id = result.get('reference_image_id', '')  # 12-digit ID format
+                            gt_ids = result.get('ground_truth_ids', [])    # List in 12-digit ID format
                             
                             if ref_id and gt_ids:
-                                # ground_truth_idsをソートしてタプル化（順序に依存しない一意な識別子を作成）
+                                # Sort and convert ground_truth_ids to tuple (create order-independent unique identifier)
                                 gt_ids_sorted = tuple(sorted(gt_ids))
                                 query_signature = (ref_id, gt_ids_sorted)
                                 processed_query_signatures.add(query_signature)
@@ -1093,20 +1093,20 @@ class MultiTurnCIRSystem:
                         print(f"Found existing results file with {len(self.results)} processed queries")
                         print(f"Processed query signatures (CIRCO - ref+GTs): {len(processed_query_signatures)}")
                         
-                        # 未処理のクエリのみを残す
+                        # Keep only unprocessed queries
                         original_data_count = len(self.data)
                         remaining_data = []
-                        
+
                         for query_item in self.data:
-                            # current dataのoriginal_*_idを使用して照合
+                            # Match using original_*_id in current data
                             original_ref_id = query_item.get('original_reference_id', '')
                             original_gt_ids = query_item.get('original_gt_ids', [])
                             
-                            # 拡張子を除去して12桁数値IDにする
+                            # Remove extension to get 12-digit numeric ID
                             if original_ref_id.endswith('.jpg'):
                                 original_ref_id = original_ref_id[:-4]
                             
-                            # ground truthsの拡張子も除去
+                            # Also remove extension from ground truths
                             normalized_gt_ids = []
                             for gt_id in original_gt_ids:
                                 if gt_id.endswith('.jpg'):
@@ -1114,11 +1114,11 @@ class MultiTurnCIRSystem:
                                 else:
                                     normalized_gt_ids.append(gt_id)
                             
-                            # ground_truth_idsをソートしてタプル化
+                            # Sort ground_truth_ids and convert to tuple
                             gt_ids_sorted = tuple(sorted(normalized_gt_ids))
                             query_signature = (original_ref_id, gt_ids_sorted)
                             
-                            # この署名が処理済みでない場合のみ残す
+                            # Keep only if this signature has not been processed
                             if query_signature not in processed_query_signatures:
                                 remaining_data.append(query_item)
                         
@@ -1127,7 +1127,7 @@ class MultiTurnCIRSystem:
                         print(f"Resume mode (CIRCO with GTs): {original_data_count - len(remaining_data)} queries already processed")
                         print(f"Remaining queries to process: {len(remaining_data)}")
                         
-                        # デバッグ用：処理済みクエリの例を表示
+                        # For debugging: show sample processed queries
                         if processed_query_signatures and len(processed_query_signatures) <= 5:
                             print("Sample processed query signatures:")
                             for i, sig in enumerate(list(processed_query_signatures)[:3]):
@@ -1140,12 +1140,12 @@ class MultiTurnCIRSystem:
                                 print(f"  {i+1}. ref: {ref_id}, GTs: {gt_tuple}")
                         
                     else:
-                        # 従来の方式：(reference_id, target_id)ペアで照合
+                        # Traditional method: match by (reference_id, target_id) pair
                         processed_query_pairs = set()
                         
-                        # 処理済みクエリを(reference_id, target_id)の組み合わせで管理
+                        # Manage processed queries by (reference_id, target_id) combination
                         for result in self.results:
-                            # 結果からreference_image_idとtarget_image_idの組み合わせを取得
+                            # Get reference_image_id and target_image_id combination from result
                             ref_id = result.get('reference_image_id', '')
                             target_id = result.get('target_image_id', '')
                             
@@ -1155,17 +1155,17 @@ class MultiTurnCIRSystem:
                         print(f"Found existing results file with {len(self.results)} processed queries")
                         print(f"Processed query pairs: {len(processed_query_pairs)}")
                         
-                        # 未処理のクエリのみを残す
+                        # Keep only unprocessed queries
                         original_data_count = len(self.data)
                         remaining_data = []
-                        
+
                         for query_item in self.data:
-                            # 現在のクエリの(reference_id, target_id)ペアを取得
+                            # Get current query's (reference_id, target_id) pair
                             ref_id = query_item['reference_image_id']
                             target_id = query_item['target_image_id']
                             query_pair = (ref_id, target_id)
                             
-                            # このペアが処理済みでない場合のみ残す
+                            # Keep only if this pair has not been processed
                             if query_pair not in processed_query_pairs:
                                 remaining_data.append(query_item)
                         
@@ -1187,7 +1187,7 @@ class MultiTurnCIRSystem:
             print(f"No existing results file found ({output_file}) - starting fresh evaluation")
     
     def load_dataset(self) -> List[Dict]:
-        """データセットをロード"""
+        """Load dataset"""
         if self.dataset_name == 'circo':
             return DatasetLoader.load_circo_data(self.config['annotation_file'])
         elif self.dataset_name == 'cirr_train':
@@ -1200,39 +1200,39 @@ class MultiTurnCIRSystem:
             raise ValueError(f"Unknown dataset: {self.dataset_name}")
     
     def load_reference_captions(self) -> Dict[str, str]:
-        """事前計算されたキャプションを読み込み"""
+        """Load pre-computed captions"""
         captions = {}
         
-        # 設定にキャプションファイルが指定されている場合
+        # If caption file is specified in config
         if 'caption_file' in self.config and os.path.exists(self.config['caption_file']):
             with open(self.config['caption_file'], 'r') as f:
                 caption_data = json.load(f)
                 
-            # キャプションデータの形式に応じて処理
+            # Process according to caption data format
             if isinstance(caption_data, dict):
                 captions = caption_data
             elif isinstance(caption_data, list):
-                # リスト形式の場合、適切なキーでマッピング
+                # For list format, map with appropriate keys
                 for item in caption_data:
                     if 'image_id' in item and 'caption' in item:
                         captions[item['image_id']] = item['caption']
         
-        # gpt4ominiキャプションファイル（PyTorch形式）の読み込み
+        # Load gpt4omini caption file (PyTorch format)
         if 'gpt4omini_caption_features_file' in self.config and os.path.exists(self.config['gpt4omini_caption_features_file']):
             try:
                 features_data = torch.load(self.config['gpt4omini_caption_features_file'], map_location='cpu', weights_only=False)
                 if isinstance(features_data, dict):
-                    # PyTorchファイルから直接辞書を取得
+                    # Get dictionary directly from PyTorch file
                     captions.update(features_data)
                 elif hasattr(features_data, 'items'):
-                    # その他の辞書形式
+                    # Other dictionary formats
                     captions.update(dict(features_data.items()))
             except Exception as e:
                 print(f"Warning: Failed to load GPT-4o-mini captions from {self.config['gpt4omini_caption_features_file']}: {e}")
         
-        # データセット固有の処理
+        # Dataset-specific processing
         if self.dataset_name == 'circo':
-            # CIRCOの場合、COCOキャプションも併用可能
+            # For CIRCO, COCO captions can also be used
             coco_caption_file = 'CIRCO/annotations/captions_val2017.json'
             if os.path.exists(coco_caption_file):
                 with open(coco_caption_file, 'r') as f:
@@ -1244,7 +1244,7 @@ class MultiTurnCIRSystem:
                         captions[img_id] = ann['caption']
             
         elif self.dataset_name.startswith('fashioniq'):
-            # Fashion-IQの場合、事前生成されたキャプションファイルが必要
+            # For Fashion-IQ, pre-generated caption file is required
             if not captions:
                 raise ValueError(f"No captions loaded for Fashion-IQ dataset. "
                                f"Caption file: {self.config.get('caption_file', 'Not specified')} "
@@ -1254,48 +1254,48 @@ class MultiTurnCIRSystem:
         return captions
     
     def get_reference_caption(self, reference_image_id: str) -> str:
-        """reference画像のキャプションを取得"""
+        """Get caption for reference image"""
         if reference_image_id in self.reference_captions:
             return self.reference_captions[reference_image_id]
         
-        # フルパス形式のキーを試す（全データセット統一対応）
+        # Try full path format key (unified for all datasets)
         potential_keys = []
         
         if self.dataset_name.startswith('fashioniq'):
             # Fashion-IQ: fashion-iq/images/{category}/{image_id}
             category = self.dataset_name.split('_')[1]  # dress, shirt, toptee
             
-            # 拡張子の有無を考慮した候補
+            # Candidates considering extension presence
             base_key = f"fashion-iq/images/{category}/{reference_image_id}"
             potential_keys.append(base_key)
             
-            # 拡張子なしの場合、.jpg付きも試す
+            # If no extension, also try with .jpg
             if not reference_image_id.endswith('.jpg'):
                 potential_keys.append(f"fashion-iq/images/{category}/{reference_image_id}.jpg")
-            # 拡張子ありの場合、なしも試す
+            # If has extension, also try without
             elif reference_image_id.endswith('.jpg'):
                 base_id = reference_image_id[:-4]
                 potential_keys.append(f"fashion-iq/images/{category}/{base_id}")
             
         elif self.dataset_name.startswith('cirr'):
-            # CIRR: 実際のキャプションファイル構造に合わせて検索
-            # キャプションファイルではフルパス形式で保存されている
+            # CIRR: Search matching actual caption file structure
+            # Captions are stored in full path format
             
-            # 基本的なキー候補
+            # Basic key candidates
             potential_keys.extend([
                 reference_image_id,
                 f"{reference_image_id}.png",
             ])
             
-            # フルパス形式のキー候補（実際の保存形式）
-            # Train: 階層構造 (0-99のサブディレクトリ)
+            # Full path format key candidates (actual storage format)
+            # Train: Hierarchical structure (0-99 subdirectories)
             for subdir in range(100):
                 potential_keys.extend([
                     f"cirr/img_raw/train/{subdir}/{reference_image_id}",
                     f"cirr/img_raw/train/{subdir}/{reference_image_id}.png",
                 ])
             
-            # Dev/Val: フラット構造
+            # Dev/Val: Flat structure
             potential_keys.extend([
                 f"cirr/img_raw/dev/{reference_image_id}",
                 f"cirr/img_raw/dev/{reference_image_id}.png",
@@ -1304,7 +1304,7 @@ class MultiTurnCIRSystem:
             ])
         
         elif self.dataset_name == 'circo':
-            # CIRCO: ハッシュ値から実際のファイル名に変換してキャプションを検索
+            # CIRCO: Convert hash value to actual filename and search for caption
             if reference_image_id in self.hash_to_filename:
                 filename = self.hash_to_filename[reference_image_id]
                 potential_keys.extend([
@@ -1312,18 +1312,18 @@ class MultiTurnCIRSystem:
                     filename
                 ])
             else:
-                # ハッシュ値でない場合（12桁形式）はそのまま使用
+                # If not hash value (12-digit format), use as-is
                 potential_keys.extend([
                     f"CIRCO/COCO2017_unlabeled/unlabeled2017/{reference_image_id}",
                     f"CIRCO/COCO2017_unlabeled/unlabeled2017/{reference_image_id}.jpg"
                 ])
         
-        # 候補キーで検索
+        # Search with candidate keys
         for key in potential_keys:
             if key in self.reference_captions:
                 return self.reference_captions[key]
         
-        # 見つからない場合はエラー
+        # Error if not found
         raise KeyError(f"Caption not found for image: {reference_image_id}. "
                       f"Available captions: {len(self.reference_captions)} images. "
                       f"Check caption file: {self.config.get('caption_file', 'Not specified')}. "
@@ -1331,7 +1331,7 @@ class MultiTurnCIRSystem:
                       f"Sample actual keys: {list(self.reference_captions.keys())[:3]}")
     
     def check_success(self, ground_truth_ids: List[str], search_results: List[Tuple[str, float]], k: int = 10) -> bool:
-        """成功判定（ground truthがtop-kに含まれるかチェック）"""
+        """Check success (whether ground truth is in top-k)"""
         if not ground_truth_ids:
             raise ValueError("Ground truth IDs list is empty")
         if not search_results:
@@ -1342,7 +1342,7 @@ class MultiTurnCIRSystem:
     
     def find_most_similar_to_gt(self, ground_truth_ids: List[str], search_results: List[Tuple[str, float]], 
                                selected_images: set = None) -> str:
-        """Ground truthに最も類似した画像を検索結果から選択（GTがtop10に入っていない場合のみ）"""
+        """Select image most similar to ground truth from search results (only when GT is not in top10)"""
         if not ground_truth_ids:
             raise ValueError("Ground truth IDs list is empty")
         if not search_results:
@@ -1350,25 +1350,25 @@ class MultiTurnCIRSystem:
             
         top_k_ids = [r[0] for r in search_results[:10]]
         
-        # selected_imagesがNoneの場合は空のセットで初期化
+        # Initialize empty set if selected_images is None
         if selected_images is None:
             selected_images = set()
         
-        # 選択済み画像のハッシュ値セットを作成
+        # Create set of hash values for selected images
         selected_hashes = set()
         for img_id in selected_images:
             img_hash = self.get_image_hash(img_id)
             if img_hash:
                 selected_hashes.add(img_hash)
         
-        # 未選択の候補画像を取得（ハッシュ値ベースで重複チェック）
+        # Get unselected candidate images (check duplicates by hash value)
         available_images = []
         for img_id in top_k_ids:
             img_hash = self.get_image_hash(img_id)
             if img_hash and img_hash not in selected_hashes:
                 available_images.append(img_id)
             elif not img_hash:
-                # ハッシュ値が取得できない場合は従来通りIDで判定
+                # If hash value cannot be obtained, use ID as before
                 if img_id not in selected_images:
                     available_images.append(img_id)
         
@@ -1378,49 +1378,49 @@ class MultiTurnCIRSystem:
                            f"Selected hashes: {len(selected_hashes)}")
         
         if self.dataset_name == 'circo':
-            # CIRCO用: 最も検索上位にいたGTをキャプション類似度の基準として使用
-            # まず全てのGTの検索順位を調べて、最も上位のGTを特定
+            # For CIRCO: Use GT with highest search rank as caption similarity reference
+            # First check search rank for all GTs and identify the top-ranked GT
             best_gt_position = len(search_results)
             best_gt_id = None
             
             for gt_id in ground_truth_ids:
                 try:
-                    # 全検索結果での順位を取得
+                    # Get rank in all search results
                     all_ids = [r[0] for r in search_results]
                     position = all_ids.index(gt_id)
                     if position < best_gt_position:
                         best_gt_position = position
                         best_gt_id = gt_id
                 except ValueError:
-                    # GTが検索結果に含まれない場合はスキップ
+                    # Skip if GT is not in search results
                     continue
             
             if best_gt_id is None:
                 raise ValueError(f"No ground truth images found in search results for CIRCO. "
                                f"GT IDs: {ground_truth_ids}, Search results: {[r[0] for r in search_results[:20]]}")
             
-            # 最も上位のGTのキャプション特徴量を取得
+            # Get caption features for the top-ranked GT
             if best_gt_id in self.caption_features:
                 gt_caption_features = self.caption_features[best_gt_id].to(device)
                 gt_caption_features = normalize(gt_caption_features.unsqueeze(0), dim=-1)
             else:
-                # キャプション特徴量が見つからない場合は明確なエラー
+                # Clear error if caption features not found
                 raise KeyError(f"Caption features not found for best GT image '{best_gt_id}' in CIRCO. "
                              f"Available caption features: {len(self.caption_features)} images. "
                              f"Check gpt4omini_caption_features_file: {self.config.get('gpt4omini_caption_features_file', 'Not specified')}")
             
-            # 各候補画像のキャプション特徴量と類似度を計算
+            # Calculate caption features and similarity for each candidate image
             best_similarity = -1.0
             best_image = None
             similarities_computed = 0
             
             for img_id in available_images:
                 if img_id in self.caption_features:
-                    # 事前計算された特徴量を使用
+                    # Use pre-computed features
                     img_caption_features = self.caption_features[img_id].to(device)
                     img_caption_features = normalize(img_caption_features.unsqueeze(0), dim=-1)
                     
-                    # コサイン類似度を計算
+                    # Calculate cosine similarity
                     similarity = torch.cosine_similarity(gt_caption_features, img_caption_features, dim=-1).item()
                     similarities_computed += 1
                     
@@ -1428,7 +1428,7 @@ class MultiTurnCIRSystem:
                         best_similarity = similarity
                         best_image = img_id
                 else:
-                    # キャプション特徴量が見つからない場合は警告のみ（計算続行）
+                    # Only warn if caption features not found (continue computation)
                     print(f"Warning: Caption features not found for candidate image '{img_id}' in CIRCO")
                     continue
             
@@ -1441,12 +1441,12 @@ class MultiTurnCIRSystem:
             return best_image
         
         elif self.dataset_name.startswith('cirr'):
-            # CIRR用: キャプションの特徴量を使ってGTに最も近い画像を選択
-            # Ground truthのキャプション特徴量を取得
-            gt_id = ground_truth_ids[0]  # CIRRは単一GT
+            # For CIRR: Select image closest to GT using caption features
+            # Get caption features for ground truth
+            gt_id = ground_truth_ids[0]  # CIRR has single GT
             if gt_id in self.caption_features:
                 gt_caption_features = self.caption_features[gt_id]
-                # numpy配列の場合はテンソルに変換
+                # Convert to tensor if numpy array
                 if isinstance(gt_caption_features, np.ndarray):
                     gt_caption_features = torch.from_numpy(gt_caption_features).float()
                 gt_caption_features = gt_caption_features.to(device)
@@ -1456,22 +1456,22 @@ class MultiTurnCIRSystem:
                              f"Available caption features: {len(self.caption_features)} images. "
                              f"Check gpt4omini_caption_features_file: {self.config.get('gpt4omini_caption_features_file', 'Not specified')}")
             
-            # 各候補画像のキャプション特徴量と類似度を計算
+            # Calculate caption features and similarity for each candidate image
             best_similarity = -1.0
             best_image = None
             similarities_computed = 0
             
             for img_id in available_images:
                 if img_id in self.caption_features:
-                    # 事前計算された特徴量を使用
+                    # Use pre-computed features
                     img_caption_features = self.caption_features[img_id]
-                    # numpy配列の場合はテンソルに変換
+                    # Convert to tensor if numpy array
                     if isinstance(img_caption_features, np.ndarray):
                         img_caption_features = torch.from_numpy(img_caption_features).float()
                     img_caption_features = img_caption_features.to(device)
                     img_caption_features = normalize(img_caption_features.unsqueeze(0), dim=-1)
                     
-                    # コサイン類似度を計算
+                    # Calculate cosine similarity
                     similarity = torch.cosine_similarity(gt_caption_features, img_caption_features, dim=-1).item()
                     similarities_computed += 1
                     
@@ -1479,7 +1479,7 @@ class MultiTurnCIRSystem:
                         best_similarity = similarity
                         best_image = img_id
                 else:
-                    # キャプション特徴量が見つからない場合は警告のみ（計算続行）
+                    # Only warn if caption features not found (continue computation)
                     print(f"Warning: Caption features not found for candidate image '{img_id}' in CIRR")
                     continue
             
@@ -1492,25 +1492,25 @@ class MultiTurnCIRSystem:
             return best_image
         
         elif self.dataset_name.startswith('fashioniq'):
-            # FashionIQ用: キャプションの特徴量を使ってGTに最も近い画像を選択
-            # Ground truthのキャプション特徴量を取得
-            gt_id = ground_truth_ids[0]  # FashionIQは単一GT
+            # For FashionIQ: Select image closest to GT using caption features
+            # Get caption features for ground truth
+            gt_id = ground_truth_ids[0]  # FashionIQ has single GT
             
-            # FashionIQでは拡張子の有無を考慮してGTキャプション特徴量を検索
+            # For FashionIQ, search GT caption features considering extension presence
             gt_caption_features = None
             
-            # 候補1: 元のID
+            # Candidate 1: Original ID
             if gt_id in self.caption_features:
                 gt_caption_features = self.caption_features[gt_id]
-            # 候補2: .jpg拡張子付き
+            # Candidate 2: With .jpg extension
             elif f"{gt_id}.jpg" in self.caption_features:
                 gt_caption_features = self.caption_features[f"{gt_id}.jpg"]
-            # 候補3: 拡張子なし（元のIDから拡張子を除去）
+            # Candidate 3: Without extension (remove extension from original ID)
             elif gt_id.endswith('.jpg') and gt_id[:-4] in self.caption_features:
                 gt_caption_features = self.caption_features[gt_id[:-4]]
             
             if gt_caption_features is not None:
-                # numpy配列の場合はテンソルに変換
+                # Convert to tensor if numpy array
                 if isinstance(gt_caption_features, np.ndarray):
                     gt_caption_features = torch.from_numpy(gt_caption_features).float()
                 gt_caption_features = gt_caption_features.to(device)
@@ -1520,35 +1520,35 @@ class MultiTurnCIRSystem:
                              f"Available caption features: {len(self.caption_features)} images. "
                              f"Check gpt4omini_caption_features_file: {self.config.get('gpt4omini_caption_features_file', 'Not specified')}")
             
-            # 各候補画像のキャプション特徴量と類似度を計算
+            # Calculate caption features and similarity for each candidate image
             best_similarity = -1.0
             best_image = None
             similarities_computed = 0
             
             for img_id in available_images:
-                # FashionIQでは拡張子の有無を考慮して検索
+                # For FashionIQ, search considering extension presence
                 caption_features = None
                 
-                # 候補1: 元のID
+                # Candidate 1: Original ID
                 if img_id in self.caption_features:
                     caption_features = self.caption_features[img_id]
-                # 候補2: .jpg拡張子付き
+                # Candidate 2: With .jpg extension
                 elif f"{img_id}.jpg" in self.caption_features:
                     caption_features = self.caption_features[f"{img_id}.jpg"]
-                # 候補3: 拡張子なし（元のIDから拡張子を除去）
+                # Candidate 3: Without extension (remove extension from original ID)
                 elif img_id.endswith('.jpg') and img_id[:-4] in self.caption_features:
                     caption_features = self.caption_features[img_id[:-4]]
                 
                 if caption_features is not None:
-                    # 事前計算された特徴量を使用
+                    # Use pre-computed features
                     img_caption_features = caption_features
-                    # numpy配列の場合はテンソルに変換
+                    # Convert to tensor if numpy array
                     if isinstance(img_caption_features, np.ndarray):
                         img_caption_features = torch.from_numpy(img_caption_features).float()
                     img_caption_features = img_caption_features.to(device)
                     img_caption_features = normalize(img_caption_features.unsqueeze(0), dim=-1)
                     
-                    # コサイン類似度を計算
+                    # Calculate cosine similarity
                     similarity = torch.cosine_similarity(gt_caption_features, img_caption_features, dim=-1).item()
                     similarities_computed += 1
                     
@@ -1556,7 +1556,7 @@ class MultiTurnCIRSystem:
                         best_similarity = similarity
                         best_image = img_id
                 else:
-                    # キャプション特徴量が見つからない場合は警告のみ（計算続行）
+                    # Only warn if caption features not found (continue computation)
                     print(f"Warning: Caption features not found for candidate image '{img_id}' in FashionIQ")
                     continue
             
@@ -1569,41 +1569,41 @@ class MultiTurnCIRSystem:
             return best_image
         
         else:
-            # 他のデータセットでは、利用可能な画像から最初の画像を選択
+            # For other datasets, select first available image
             return available_images[0]
     
     def get_gt_rankings(self, ground_truth_ids: List[str], search_results: List[Tuple[str, float]]) -> Dict[str, int]:
-        """Ground truthの順位を取得（1-indexed）"""
+        """Get ground truth rankings (1-indexed)"""
         gt_rankings = {}
         result_ids = [result[0] for result in search_results]
         
         for gt_id in ground_truth_ids:
             try:
-                # 1-indexedで順位を記録
+                # Record rank as 1-indexed
                 rank = result_ids.index(gt_id) + 1
                 gt_rankings[gt_id] = rank
             except ValueError:
-                # GTが検索結果に含まれない場合は-1
+                # -1 if GT is not in search results
                 gt_rankings[gt_id] = -1
         
         return gt_rankings
     
     def get_best_gt_rank(self, gt_rankings: Dict[str, int]) -> int:
-        """最も良い（小さい）GT順位を取得"""
+        """Get the best (smallest) GT rank"""
         valid_ranks = [rank for rank in gt_rankings.values() if rank > 0]
         return min(valid_ranks) if valid_ranks else -1
     
     async def process_single_query(self, query_item: Dict) -> Dict:
-        """単一クエリを処理"""
-        # クエリIDを統一的に設定（元の方式）
+        """Process single query"""
+        # Set query ID uniformly (original method)
         query_id = query_item.get('id')
         if query_id is None:
             query_id = query_item.get('query_id')
         if query_id is None:
-            # フォールバック：reference_image_idを使用
+            # Fallback: use reference_image_id
             query_id = query_item.get('reference_image_id', 'unknown')
         
-        # 数値IDを文字列に変換
+        # Convert numeric ID to string
         if isinstance(query_id, int):
             query_id = str(query_id)
         
@@ -1618,15 +1618,15 @@ class MultiTurnCIRSystem:
             'turns': []
         }
         
-        # 選択済み画像の記録（reference_imageを事前に追加して重複を防ぐ）
+        # Record selected images (add reference_image first to prevent duplicates)
         selected_images = set()
-        selected_images.add(query_item['reference_image_id'])  # reference_imageとの重複を防ぐ
+        selected_images.add(query_item['reference_image_id'])  # Prevent duplicates with reference_image
         previous_relative_captions = []
         
-        # リファレンスキャプションを取得
+        # Get reference caption
         reference_caption = self.get_reference_caption(query_item['reference_image_id'])
         
-        # ターン0: 初期検索
+        # Turn 0: Initial search
         initial_combined_caption = await self.model_manager.combine_captions_with_gpt4o(
             reference_caption, query_item['relative_caption']
         )
@@ -1636,7 +1636,7 @@ class MultiTurnCIRSystem:
         
         search_results = self.retrieval_engine.search_images(current_query_features)
         
-        # GT順位を取得
+        # Get GT rank
         gt_rankings = self.get_gt_rankings(query_item['ground_truth_ids'], search_results)
         best_gt_rank = self.get_best_gt_rank(gt_rankings)
         
@@ -1645,70 +1645,70 @@ class MultiTurnCIRSystem:
             'query_text': initial_combined_caption,
             'search_results': search_results[:10],
             'selected_image': None,
-            'selected_image_caption': None,  # ターン0では選択画像なし
+            'selected_image_caption': None,  # No selected image in turn 0
             'relative_caption': None,
             'gt_rankings': gt_rankings,
             'best_gt_rank': best_gt_rank
         }
         results['turns'].append(turn_result)
         
-        # 成功判定
+        # Success check
         if self.check_success(query_item['ground_truth_ids'], search_results):
             results['success'] = True
             results['success_turn'] = 0
             return results
         
-        # マルチターン処理
+        # Multi-turn processing
         for turn in range(1, self.max_turns + 1):
-            # GTがtop10に入っているかチェック
+            # Check if GT is in top10
             if self.check_success(query_item['ground_truth_ids'], search_results):
-                # GTがtop10に入っている場合は早期終了
+                # Early termination if GT is in top10
                 results['success'] = True
-                results['success_turn'] = turn - 1  # 前のターンで成功
+                results['success_turn'] = turn - 1  # Success in previous turn
                 break
             
-            # 最も類似した画像を選択
+            # Select most similar image
             if self.dataset_name == 'circo':
-                # CIRCOの場合：最も検索上位にいたGTを選択
+                # For CIRCO: Select GT with highest search rank
                 selected_image = self.find_most_similar_to_gt(query_item['ground_truth_ids'], search_results, selected_images)
             else:
-                # 他のデータセット（CIRR、FashionIQ）では、キャプション類似度を考慮して選択
+                # For other datasets (CIRR, FashionIQ), select considering caption similarity
                 selected_image = self.find_most_similar_to_gt(
                     query_item['ground_truth_ids'], search_results, selected_images
                 )
             
             selected_images.add(selected_image)
             
-            # 選択された画像のキャプションを取得
+            # Get caption for selected image
             try:
                 selected_image_caption = self.get_reference_caption(selected_image)
             except KeyError:
                 selected_image_caption = f"Caption not found for {selected_image}"
             
-            # GPT-4o-miniでrelative captionを生成
-            # ターン1以降では選択された画像とground truth画像を比較
+            # Generate relative caption with GPT-4o-mini
+            # From turn 1 onwards, compare selected image with ground truth image
             if self.dataset_name.startswith('fashioniq'):
-                # Fashion-IQの場合、カテゴリサブディレクトリを含め、拡張子も追加
+                # For Fashion-IQ, include category subdirectory and add extension
                 category = self.dataset_name.split('_')[1]  # dress, shirt, toptee
                 
-                # 拡張子を自動追加
+                # Auto-add extension
                 selected_img_with_ext = selected_image if selected_image.endswith('.jpg') else f"{selected_image}.jpg"
                 target_img_with_ext = query_item['target_image_id'] if query_item['target_image_id'].endswith('.jpg') else f"{query_item['target_image_id']}.jpg"
                 
                 selected_image_path = os.path.join(self.config['image_dir'], category, selected_img_with_ext)
                 target_image_path = os.path.join(self.config['image_dir'], category, target_img_with_ext)
             elif self.dataset_name.startswith('cirr'):
-                # CIRRの場合、RetrievalEngineと同じロジックで正しいパスを検索
+                # For CIRR, search for correct path using the same logic as RetrievalEngine
                 def find_cirr_image_path(image_id: str) -> str:
-                    """CIRRの画像パスを階層構造から検索"""
-                    # trainの場合：階層構造（0-99のサブディレクトリ）
-                    for subdir in range(100):  # 0-99のサブディレクトリを検索
+                    """Search for CIRR image path from hierarchical structure"""
+                    # For train: hierarchical structure (0-99 subdirectories)
+                    for subdir in range(100):  # Search 0-99 subdirectories
                         for ext in ['.png', '.jpg', '.jpeg']:
                             image_path = os.path.join(self.config['image_dir'], 'train', str(subdir), f"{image_id}{ext}")
                             if os.path.exists(image_path):
                                 return image_path
                     
-                    # val, dev, test1の場合：フラット構造
+                    # For val, dev, test1: Flat structure
                     for split in ['val', 'dev', 'test1']:
                         for ext in ['.png', '.jpg', '.jpeg']:
                             image_path = os.path.join(self.config['image_dir'], split, f"{image_id}{ext}")
@@ -1720,48 +1720,48 @@ class MultiTurnCIRSystem:
                 selected_image_path = find_cirr_image_path(selected_image)
                 target_image_path = find_cirr_image_path(query_item['target_image_id'])
             else:
-                # 他のデータセット（CIRCO）ではハッシュ値から実際のファイル名に変換
+                # For other datasets (CIRCO), convert hash value to actual filename
                 def get_circo_image_path(image_id: str) -> str:
                     if image_id in self.hash_to_filename:
                         filename = self.hash_to_filename[image_id]
                         return os.path.join(self.config['image_dir'], filename)
                     else:
-                        # ハッシュ値でない場合はそのまま使用
+                        # Use as-is if not hash value
                         return os.path.join(self.config['image_dir'], image_id)
                 
                 selected_image_path = get_circo_image_path(selected_image)
                 target_image_path = get_circo_image_path(query_item['target_image_id'])
             
-            # ファイルの存在確認
+            # Check file existence
             if not os.path.exists(selected_image_path):
                 raise FileNotFoundError(f"Selected image not found: {selected_image_path}")
             if not os.path.exists(target_image_path):
                 raise FileNotFoundError(f"Target image not found: {target_image_path}")
             
-            # GPT-4o-miniでrelative captionを生成（選択された画像 → ground truth画像への変換）
+            # Generate relative caption with GPT-4o-mini (transform selected image → ground truth image)
             new_relative_caption = await self.model_manager.generate_relative_caption_with_gpt4o(
                 selected_image_path, target_image_path, previous_relative_captions,
-                similarity_threshold=0.8,  # CLIP類似度の閾値
-                max_retries=3  # 最大再試行回数
+                similarity_threshold=0.8,  # CLIP similarity threshold
+                max_retries=3  # Maximum retry count
             )
             
             previous_relative_captions.append(new_relative_caption)
             
-            # 新しいクエリを生成
+            # Generate new query
             new_combined_caption = await self.model_manager.combine_captions_with_gpt4o(
                 selected_image_caption, new_relative_caption
             )
             
-            # クエリを更新
+            # Update query
             unselected_images = [r[0] for r in search_results[:10] if r[0] != selected_image]
             current_query_features = self.retrieval_engine.update_query_with_feedback(
                 current_query_features, selected_image, unselected_images, new_combined_caption
             )
             
-            # 再検索
+            # Re-search
             search_results = self.retrieval_engine.search_images(current_query_features)
             
-            # GT順位を取得
+            # Get GT rank
             gt_rankings = self.get_gt_rankings(query_item['ground_truth_ids'], search_results)
             best_gt_rank = self.get_best_gt_rank(gt_rankings)
             
@@ -1770,27 +1770,27 @@ class MultiTurnCIRSystem:
                 'query_text': new_combined_caption,
                 'search_results': search_results[:10],
                 'selected_image': selected_image,
-                'selected_image_caption': selected_image_caption,  # 選択画像のキャプション
+                'selected_image_caption': selected_image_caption,  # Caption for selected image
                 'relative_caption': new_relative_caption,
                 'gt_rankings': gt_rankings,
                 'best_gt_rank': best_gt_rank
             }
             results['turns'].append(turn_result)
             
-            # 再検索後の成功判定
+            # Success check after re-search
             if self.check_success(query_item['ground_truth_ids'], search_results):
                 results['success'] = True
                 results['success_turn'] = turn
                 break
             
-            # 少し待機
+            # Brief wait
             time.sleep(0.5)
         
         return results
     
     def run_evaluation(self) -> None:
-        """評価を実行"""
-        # 再開モードの情報表示
+        """Run evaluation"""
+        # Display resume mode information
         already_processed = len(self.results)
         if already_processed > 0:
             print(f"=== RESUME MODE ===")
@@ -1803,33 +1803,33 @@ class MultiTurnCIRSystem:
         
         print(f"Processing {len(self.data)} queries for {self.dataset_name}")
         
-        # データ完全性チェックを実行
+        # Run data completeness check
         self.completeness_info = self.check_data_completeness()
         
-        # 画像ディレクトリの設定
+        # Set image directory
         image_dir = self.config.get('image_dir', '')
         
         def check_image_exists(image_id: str) -> bool:
-            """画像ファイルが存在するかチェック"""
+            """Check if image file exists"""
             if self.dataset_name.startswith('fashioniq'):
-                # Fashion-IQ: カテゴリサブディレクトリを含め、拡張子も自動追加
+                # Fashion-IQ: Include category subdirectory and auto-add extension
                 category = self.dataset_name.split('_')[1]  # dress, shirt, toptee
                 img_with_ext = image_id if image_id.endswith('.jpg') else f"{image_id}.jpg"
                 image_path = os.path.join(image_dir, category, img_with_ext)
                 return os.path.exists(image_path)
             elif self.dataset_name.startswith('cirr'):
-                # CIRRの場合：splitによって構造が異なる
-                # train: 階層構造（0-99のサブディレクトリ）
-                # val, dev, test1: フラット構造（直下にファイル）
+                # For CIRR: structure differs by split
+                # train: hierarchical structure (0-99 subdirectories)
+                # val, dev, test1: flat structure (files directly under directory)
                 
-                # trainの場合：階層構造
-                for subdir in range(100):  # 0-99のサブディレクトリを検索
+                # For train: hierarchical structure
+                for subdir in range(100):  # Search 0-99 subdirectories
                     for ext in ['.jpg', '.jpeg', '.png']:
                         image_path = os.path.join(image_dir, 'train', str(subdir), f"{image_id}{ext}")
                         if os.path.exists(image_path):
                             return True
                 
-                # val, dev, test1の場合：フラット構造
+                # For val, dev, test1: Flat structure
                 for split in ['val', 'dev', 'test1']:
                     for ext in ['.jpg', '.jpeg', '.png']:
                         image_path = os.path.join(image_dir, split, f"{image_id}{ext}")
@@ -1838,13 +1838,13 @@ class MultiTurnCIRSystem:
                 
                 return False
             else:
-                # CIRCO: ハッシュ値から実際のファイル名に変換
+                # CIRCO: Convert hash value to actual filename
                 if image_id in self.hash_to_filename:
                     filename = self.hash_to_filename[image_id]
                     image_path = os.path.join(image_dir, filename)
                     return os.path.exists(image_path)
                 else:
-                    # ハッシュ値でない場合（12桁形式）はそのまま使用
+                    # If not hash value (12-digit format), use as-is
                     image_path = os.path.join(image_dir, image_id)
                     return os.path.exists(image_path)
         
@@ -1855,7 +1855,7 @@ class MultiTurnCIRSystem:
             nonlocal skipped_queries, processed_queries
             
             for query_item in tqdm(self.data, desc=f"Processing {self.dataset_name} queries"):
-                # Ground Truth画像ファイルの存在をチェック
+                # Check if Ground Truth image files exist
                 gt_ids = query_item['ground_truth_ids']
                 missing_gt_files = []
                 
@@ -1863,15 +1863,15 @@ class MultiTurnCIRSystem:
                     if not check_image_exists(gt_id):
                         missing_gt_files.append(gt_id)
                 
-                # Reference画像ファイルの存在をチェック
+                # Check if Reference image file exists
                 ref_id = query_item['reference_image_id']
                 missing_ref_file = not check_image_exists(ref_id)
                 
-                # Target画像ファイルの存在をチェック
+                # Check if Target image file exists
                 target_id = query_item['target_image_id']
                 missing_target_file = not check_image_exists(target_id)
                 
-                # 画像ファイルが欠損している場合はスキップ
+                # Skip if image files are missing
                 if missing_gt_files or missing_ref_file or missing_target_file:
                     skipped_queries += 1
                     if missing_gt_files:
@@ -1882,13 +1882,13 @@ class MultiTurnCIRSystem:
                         print(f"Skipping query {query_item.get('id', '?')}: Missing target image file {target_id}")
                     continue
                 
-                # クエリを処理
+                # Process query
                 try:
                     result = await self.process_single_query(query_item)
                     self.results.append(result)
                     processed_queries += 1
                 
-                    # 定期的に結果を保存
+                    # Periodically save results
                     if len(self.results) % 10 == 0:
                         self.save_results()
                             
@@ -1897,13 +1897,13 @@ class MultiTurnCIRSystem:
                     skipped_queries += 1
                     continue
         
-        # 非同期処理を実行
+        # Execute async processing
         asyncio.run(process_queries())
         
-        # 再開モードを考慮した統計表示
+        # Display statistics considering resume mode
         total_processed_in_session = processed_queries
         total_skipped_in_session = skipped_queries
-        total_results = len(self.results)  # 既存結果 + 新規処理結果
+        total_results = len(self.results)  # Existing results + new processing results
         
         print(f"\nEvaluation session completed:")
         print(f"  Queries in this session: {len(self.data)} (remaining)")
@@ -1918,15 +1918,15 @@ class MultiTurnCIRSystem:
         overall_success_rate = len([r for r in self.results if r['success']])/max(1, total_results)*100
         print(f"  Overall success rate: {overall_success_rate:.1f}%")
         
-        # 最終結果を保存
+        # Save final results
         self.save_results()
         self.print_statistics()
     
     def save_results(self) -> None:
-        """結果をJSONファイルに保存"""
+        """Save results to JSON file"""
         
         def convert_to_json_serializable(obj):
-            """PyTorchテンソルやnumpy配列をJSON対応形式に変換"""
+            """Convert PyTorch tensors and numpy arrays to JSON-compatible format"""
             if isinstance(obj, torch.Tensor):
                 return obj.tolist()
             elif isinstance(obj, np.ndarray):
@@ -1943,29 +1943,29 @@ class MultiTurnCIRSystem:
                 return obj
         
         def convert_hash_to_image_id(hash_or_id: str) -> str:
-            """CIRCOの場合、ハッシュ値を12桁の画像IDに変換"""
+            """For CIRCO, convert hash value to 12-digit image ID"""
             if self.dataset_name == 'circo' and hasattr(self, 'hash_to_filename'):
                 if hash_or_id in self.hash_to_filename:
-                    # ハッシュ値の場合、12桁のファイル名に変換して拡張子を除去
+                    # For hash values, convert to 12-digit filename and remove extension
                     filename = self.hash_to_filename[hash_or_id]
                     if filename.endswith('.jpg'):
-                        return filename[:-4]  # 拡張子を除去して12桁の数値IDに
+                        return filename[:-4]  # Remove extension to get 12-digit numeric ID
                     return filename
             return hash_or_id
         
-        # 結果をJSON対応形式に変換（ハッシュ値も画像IDに変換）
+        # Convert results to JSON-compatible format (also convert hash values to image IDs)
         json_results = []
         for result in self.results:
             json_result = convert_to_json_serializable(result.copy())
             
-            # CIRCOの場合、ハッシュ値を画像IDに変換
+            # For CIRCO, convert hash values to image IDs
             if self.dataset_name == 'circo':
-                # reference_image_id, target_image_id, ground_truth_idsを変換
+                # Convert reference_image_id, target_image_id, ground_truth_ids
                 json_result['reference_image_id'] = convert_hash_to_image_id(json_result['reference_image_id'])
                 json_result['target_image_id'] = convert_hash_to_image_id(json_result['target_image_id'])
                 json_result['ground_truth_ids'] = [convert_hash_to_image_id(gt_id) for gt_id in json_result['ground_truth_ids']]
                 
-                # 各ターンの検索結果とselected_imageも変換
+                # Also convert search results and selected_image for each turn
                 for turn in json_result.get('turns', []):
                     if 'search_results' in turn:
                         turn['search_results'] = [
@@ -1975,7 +1975,7 @@ class MultiTurnCIRSystem:
                     if 'selected_image' in turn:
                         turn['selected_image'] = convert_hash_to_image_id(turn['selected_image'])
                     
-                    # gt_rankingsのキーも変換
+                    # Also convert gt_rankings keys
                     if 'gt_rankings' in turn:
                         turn['gt_rankings'] = {
                             convert_hash_to_image_id(gt_id): rank 
@@ -1984,7 +1984,7 @@ class MultiTurnCIRSystem:
             
             json_results.append(json_result)
         
-        # Fashion-IQと同じ形式で結果を構造化
+        # Structure results in the same format as Fashion-IQ
         final_results = {
             "dataset_name": self.dataset_name,
             "config": convert_to_json_serializable(self.config),
@@ -1992,7 +1992,7 @@ class MultiTurnCIRSystem:
             "results": json_results
         }
         
-        # 結果ファイルに保存
+        # Save to results file
         results_file = f"multiturn_cir_results_{self.dataset_name}.json"
         with open(results_file, 'w', encoding='utf-8') as f:
             json.dump(final_results, f, indent=2, ensure_ascii=False)
@@ -2001,7 +2001,7 @@ class MultiTurnCIRSystem:
         print(f"Total results: {len(json_results)}")
     
     def print_statistics(self) -> None:
-        """統計情報を出力"""
+        """Output statistics"""
         total_queries = len(self.results)
         if total_queries == 0:
             print(f"\n=== {self.dataset_name.upper()} Results ===")
@@ -2016,17 +2016,17 @@ class MultiTurnCIRSystem:
         print(f"Successful queries: {successful_queries}")
         print(f"Success rate: {success_rate:.2f}%")
         
-        # ターン別成功率の修正版
+        # Fixed version of turn-wise success rate
         turn_success = {}
-        turn_distribution = {}  # マルチターン回数の分布（0 = 初期検索のみ）
+        turn_distribution = {}  # Multi-turn count distribution (0 = initial search only)
         max_turns_observed = 0
         
         for result in self.results:
-            actual_turns_executed = len(result['turns'])  # 実際に実行されたターン数
-            multiturn_count = actual_turns_executed - 1   # マルチターン回数（ターン0を除く）
+            actual_turns_executed = len(result['turns'])  # Number of turns actually executed
+            multiturn_count = actual_turns_executed - 1   # Multi-turn count (excluding turn 0)
             max_turns_observed = max(max_turns_observed, actual_turns_executed)
             
-            # マルチターン回数をカウント
+            # Count multi-turn occurrences
             turn_distribution[multiturn_count] = turn_distribution.get(multiturn_count, 0) + 1
             
             if result['success']:
@@ -2037,16 +2037,16 @@ class MultiTurnCIRSystem:
         print(f"Turn distribution: {turn_distribution}")
         print(f"Turn distribution sum: {sum(turn_distribution.values())}")
         
-        # 各ターンに到達したクエリ数を計算
+        # Calculate number of queries reaching each turn
         turn_counts = {}
-        turn_recall_counts = {}  # 実際に評価されたクエリ数
+        turn_recall_counts = {}  # Number of queries actually evaluated
         
         for turn in range(max_turns_observed):
-            # そのターンに到達したクエリ数
+            # Number of queries reaching that turn
             queries_reaching_turn = sum(1 for r in self.results if len(r['turns']) > turn)
-            turn_counts[turn + 1] = queries_reaching_turn  # 1-indexedで表示
+            turn_counts[turn + 1] = queries_reaching_turn  # Display as 1-indexed
             
-            # そのターンで実際に評価されたクエリ数（GT順位が記録されているもの）
+            # Number of queries actually evaluated at that turn (those with recorded GT rank)
             queries_evaluated = sum(1 for r in self.results 
                                    if len(r['turns']) > turn and 
                                    r['turns'][turn].get('best_gt_rank', -1) > 0)
@@ -2062,21 +2062,21 @@ class MultiTurnCIRSystem:
         print(f"  Max turns: {max_turns_observed}")
         print(f"  Turn distribution:")
         
-        # マルチターン回数の分布を正しく表示
+        # Display multi-turn count distribution correctly
         for multiturn_count in sorted(turn_distribution.keys()):
             count = turn_distribution[multiturn_count]
             percentage = count / total_queries * 100
             if multiturn_count == 0:
                 print(f"    Initial search only: {count} queries ({percentage:.1f}%)")
             else:
-                actual_turns = multiturn_count + 1  # ターン0 + マルチターン
+                actual_turns = multiturn_count + 1  # Turn 0 + multi-turns
                 print(f"    {actual_turns} turns: {count} queries ({percentage:.1f}%)")
         
-        # 累積成功率（Hits@T）
+        # Cumulative success rate (Hits@T)
         print(f"\nHits@T (Cumulative success rate):")
         cumulative_success = 0
         for turn in range(max_turns_observed):
-            turn_successes = turn_success.get(turn, 0)  # 0-indexedのターン番号
+            turn_successes = turn_success.get(turn, 0)  # 0-indexed turn number
             cumulative_success += turn_successes
             cumulative_rate = cumulative_success / total_queries
             if turn == 0:
@@ -2084,7 +2084,7 @@ class MultiTurnCIRSystem:
             else:
                 print(f"  Turn {turn + 1}: {cumulative_rate:.3f} ({cumulative_rate * 100:.1f}%)")
         
-        # ターン別Recall@10
+        # Turn-wise Recall@10
         print(f"\nRecall@10 per Turn:")
         for turn in range(max_turns_observed):
             if turn + 1 in turn_recall_counts and turn_recall_counts[turn + 1] > 0:
@@ -2096,11 +2096,11 @@ class MultiTurnCIRSystem:
                 else:
                     print(f"  Turn {turn + 1}: {recall_rate:.3f} ({recall_rate * 100:.1f}%) [{turn_successes}/{queries_evaluated} queries]")
         
-        # 最終的なRecall@10（全体の成功率）
+        # Final Recall@10 (overall success rate)
         final_recall = successful_queries / total_queries
         print(f"\nFinal Recall@10: {final_recall:.3f} ({final_recall * 100:.1f}%)")
         
-        # AUCスコアの計算（簡易版）
+        # AUC score calculation (simplified)
         auc_sum = 0
         for turn in range(max_turns_observed):
             turn_successes = turn_success.get(turn, 0)
@@ -2110,7 +2110,7 @@ class MultiTurnCIRSystem:
         auc_score = auc_sum / max_turns_observed if max_turns_observed > 0 else 0
         print(f"AUC Score: {auc_score:.3f}")
         
-        # ターン別成功率（従来の表示も維持）
+        # Turn-wise success rate (maintain legacy display)
         print("\nSuccess by turn:")
         for turn in sorted(turn_success.keys()):
             count = turn_success[turn]
@@ -2119,10 +2119,10 @@ class MultiTurnCIRSystem:
             else:
                 print(f"  Turn {turn}: {count} queries ({count/total_queries*100:.1f}%)")
         
-        # GT順位の統計分析
+        # GT rank statistical analysis
         print("\n=== Ground Truth Ranking Analysis ===")
         
-        # 各ターンでのGT順位統計
+        # GT rank statistics per turn
         for turn in range(max_turns_observed):
             turn_gt_ranks = []
             turn_queries_with_data = 0
@@ -2139,7 +2139,7 @@ class MultiTurnCIRSystem:
                 min_rank = min(turn_gt_ranks)
                 max_rank = max(turn_gt_ranks)
                 
-                # Top-k内の割合
+                # Percentage within Top-k
                 top1_count = sum(1 for rank in turn_gt_ranks if rank == 1)
                 top5_count = sum(1 for rank in turn_gt_ranks if rank <= 5)
                 top10_count = sum(1 for rank in turn_gt_ranks if rank <= 10)
@@ -2154,7 +2154,7 @@ class MultiTurnCIRSystem:
                 print(f"  Top-5: {top5_count} ({top5_count/len(turn_gt_ranks)*100:.1f}%)")
                 print(f"  Top-10: {top10_count} ({top10_count/len(turn_gt_ranks)*100:.1f}%)")
         
-        # GT順位の改善/悪化の分析
+        # Analysis of GT rank improvement/degradation
         print("\n=== GT Ranking Improvement Analysis ===")
         
         improved_queries = 0
@@ -2181,22 +2181,22 @@ class MultiTurnCIRSystem:
             print(f"  Worsened ranking: {worsened_queries} ({worsened_queries/total_comparable*100:.1f}%)")
             print(f"  Unchanged ranking: {unchanged_queries} ({unchanged_queries/total_comparable*100:.1f}%)")
         
-        # 個別クエリの詳細例（最初の5つ）
+        # Individual query detail examples (first 5)
         print(f"\n=== Sample Query GT Ranking Progression ===")
         
         def convert_hash_to_image_id_for_display(hash_or_id: str) -> str:
-            """CIRCOの場合、ハッシュ値を12桁の画像IDに変換（表示用）"""
+            """For CIRCO, convert hash value to 12-digit image ID (for display)"""
             if self.dataset_name == 'circo' and hasattr(self, 'hash_to_filename'):
                 if hash_or_id in self.hash_to_filename:
-                    # ハッシュ値の場合、12桁のファイル名に変換して拡張子を除去
+                    # For hash values, convert to 12-digit filename and remove extension
                     filename = self.hash_to_filename[hash_or_id]
                     if filename.endswith('.jpg'):
-                        return filename[:-4]  # 拡張子を除去して12桁の数値IDに
+                        return filename[:-4]  # Remove extension to get 12-digit numeric ID
                     return filename
             return hash_or_id
         
         for i, result in enumerate(self.results[:5]):
-            # Ground truth IDsも変換
+            # Also convert Ground truth IDs
             display_gt_ids = [convert_hash_to_image_id_for_display(gt_id) for gt_id in result['ground_truth_ids']]
             print(f"\nQuery {result['query_id']} (GT: {display_gt_ids}):")
             
@@ -2208,7 +2208,7 @@ class MultiTurnCIRSystem:
                 if best_rank > 0:
                     print(f"  Turn {turn}: Best GT rank = {best_rank}")
                     if len(gt_rankings) > 1:
-                        # 複数GTがある場合は詳細表示（ハッシュ値を画像IDに変換）
+                        # Show details for multiple GTs (convert hash values to image IDs)
                         gt_details = [f"{convert_hash_to_image_id_for_display(gt_id)}:{rank}" 
                                     for gt_id, rank in gt_rankings.items() if rank > 0]
                         print(f"    GT details: {', '.join(gt_details)}")
@@ -2221,56 +2221,56 @@ class MultiTurnCIRSystem:
                 print(f"  → FAILED after {len(result['turns'])} turns")
 
     def load_caption_features(self) -> Dict[str, torch.Tensor]:
-        """事前計算されたキャプション特徴量を読み込み"""
+        """Load pre-computed caption features"""
         caption_features = {}
         
-        # gpt4ominiキャプション特徴量ファイル（PyTorch形式）の読み込み
+        # Load gpt4omini caption features file (PyTorch format)
         if 'gpt4omini_caption_features_file' in self.config and os.path.exists(self.config['gpt4omini_caption_features_file']):
             try:
                 features_data = torch.load(self.config['gpt4omini_caption_features_file'], map_location='cpu', weights_only=False)
                 
                 if isinstance(features_data, dict):
-                    # 新しい配列形式のデータかチェック
+                    # Check if data is in new array format
                     if 'features' in features_data and 'image_ids' in features_data:
-                        # 配列形式: {'features': tensor, 'image_ids': list}
+                        # Array format: {'features': tensor, 'image_ids': list}
                         features_tensor = features_data['features']  # Shape: (N, feature_dim)
                         image_ids = features_data['image_ids']  # List of image paths
                         
-                        # numpy配列の場合はテンソルに変換
+                        # Convert to tensor if numpy array
                         if isinstance(features_tensor, np.ndarray):
                             features_tensor = torch.from_numpy(features_tensor).float()
                         
-                        # 画像ID別の辞書に変換
+                        # Convert to dictionary by image ID
                         for i, image_id in enumerate(image_ids):
-                            # フルパスから画像ファイル名を抽出（拡張子なし）
+                            # Extract image filename from full path (without extension)
                             if '/' in image_id:
                                 # fashion-iq/images/dress/B008BHCT58.jpg -> B008BHCT58
                                 # CIRCO/COCO2017_unlabeled/unlabeled2017/000000212560.jpg -> 000000212560.jpg
                                 image_filename = image_id.split('/')[-1]
                                 if '.' in image_filename:
-                                    image_filename_no_ext = image_filename.rsplit('.', 1)[0]  # 拡張子を除去
+                                    image_filename_no_ext = image_filename.rsplit('.', 1)[0]  # Remove extension
                                 else:
                                     image_filename_no_ext = image_filename
                             else:
-                                # 既にファイル名のみの場合
+                                # If already filename only
                                 image_filename = image_id
                                 if '.' in image_filename:
-                                    image_filename_no_ext = image_filename.rsplit('.', 1)[0]  # 拡張子を除去
+                                    image_filename_no_ext = image_filename.rsplit('.', 1)[0]  # Remove extension
                                 else:
                                     image_filename_no_ext = image_filename
                             
-                            # CIRCOの場合は拡張子付きファイル名もキーとして保存
+                            # For CIRCO, also save filename with extension as key
                             if self.dataset_name == 'circo':
-                                caption_features[image_filename] = features_tensor[i]  # 拡張子付き
-                                caption_features[image_filename_no_ext] = features_tensor[i]  # 拡張子なし
+                                caption_features[image_filename] = features_tensor[i]  # With extension
+                                caption_features[image_filename_no_ext] = features_tensor[i]  # Without extension
                             else:
                                 caption_features[image_filename_no_ext] = features_tensor[i]
                         
                         print(f"Loaded caption features for {len(caption_features)} images from array format")
                     else:
-                        # 従来の辞書形式: {image_id: tensor, ...}
+                        # Legacy dictionary format: {image_id: tensor, ...}
                         for image_id, features in features_data.items():
-                            # numpy配列の場合はテンソルに変換
+                            # Convert to tensor if numpy array
                             if isinstance(features, np.ndarray):
                                 features = torch.from_numpy(features).float()
                             caption_features[image_id] = features
@@ -2281,40 +2281,40 @@ class MultiTurnCIRSystem:
             except Exception as e:
                 print(f"Warning: Failed to load caption features from {self.config['gpt4omini_caption_features_file']}: {e}")
         
-        # CIRCOの場合、ハッシュ値でもアクセスできるようにマッピングを追加
+        # For CIRCO, add mapping to allow access by hash value
         if self.dataset_name == 'circo' and hasattr(self, 'hash_to_filename'):
             filename_to_hash = {filename: hash_val for hash_val, filename in self.hash_to_filename.items()}
             
-            # 12桁ファイル名からハッシュ値へのマッピングを作成
+            # Create mapping from 12-digit filename to hash value
             additional_mappings = {}
             for key, features in caption_features.items():
-                # キーが12桁のファイル名（拡張子付きまたはなし）の場合
+                # If key is 12-digit filename (with or without extension)
                 if key.endswith('.jpg'):
-                    # 拡張子付きファイル名の場合
+                    # If filename with extension
                     if key in filename_to_hash:
                         hash_val = filename_to_hash[key]
                         additional_mappings[hash_val] = features
                 else:
-                    # 拡張子なしファイル名の場合、拡張子付きで検索
+                    # If filename without extension, search with extension
                     filename_with_ext = f"{key}.jpg"
                     if filename_with_ext in filename_to_hash:
                         hash_val = filename_to_hash[filename_with_ext]
                         additional_mappings[hash_val] = features
             
-            # ハッシュ値でのアクセスを追加
+            # Add access by hash value
             caption_features.update(additional_mappings)
             print(f"Added {len(additional_mappings)} hash-based mappings for CIRCO caption features")
         
         return caption_features
 
     def check_data_completeness(self) -> Dict[str, Any]:
-        """データの完全性をチェックし、欠損情報を返す"""
+        """Check data completeness and return missing information"""
         print(f"\n=== Checking data completeness for {self.dataset_name} ===")
         
-        # 画像ディレクトリの設定
+        # Set image directory
         image_dir = self.config.get('image_dir', '')
         
-        # データセットクエリで使用される画像IDを収集
+        # Collect image IDs used in dataset queries
         reference_ids = set()
         target_ids = set()
         gt_ids = set()
@@ -2324,28 +2324,28 @@ class MultiTurnCIRSystem:
             target_ids.add(query_item['target_image_id'])
             gt_ids.update(query_item['ground_truth_ids'])
         
-        # 画像ファイルの存在確認
+        # Check image file existence
         def check_image_exists(image_id: str) -> bool:
-            """画像ファイルが存在するかチェック"""
+            """Check if image file exists"""
             if self.dataset_name.startswith('fashioniq'):
-                # Fashion-IQ: カテゴリサブディレクトリを含め、拡張子も自動追加
+                # Fashion-IQ: Include category subdirectory and auto-add extension
                 category = self.dataset_name.split('_')[1]  # dress, shirt, toptee
                 img_with_ext = image_id if image_id.endswith('.jpg') else f"{image_id}.jpg"
                 image_path = os.path.join(image_dir, category, img_with_ext)
                 return os.path.exists(image_path)
             elif self.dataset_name.startswith('cirr'):
-                # CIRRの場合：splitによって構造が異なる
-                # train: 階層構造（0-99のサブディレクトリ）
-                # val, dev, test1: フラット構造（直下にファイル）
+                # For CIRR: structure differs by split
+                # train: hierarchical structure (0-99 subdirectories)
+                # val, dev, test1: flat structure (files directly under directory)
                 
-                # trainの場合：階層構造
-                for subdir in range(100):  # 0-99のサブディレクトリを検索
+                # For train: hierarchical structure
+                for subdir in range(100):  # Search 0-99 subdirectories
                     for ext in ['.jpg', '.jpeg', '.png']:
                         image_path = os.path.join(image_dir, 'train', str(subdir), f"{image_id}{ext}")
                         if os.path.exists(image_path):
                             return True
                 
-                # val, dev, test1の場合：フラット構造
+                # For val, dev, test1: Flat structure
                 for split in ['val', 'dev', 'test1']:
                     for ext in ['.jpg', '.jpeg', '.png']:
                         image_path = os.path.join(image_dir, split, f"{image_id}{ext}")
@@ -2354,35 +2354,35 @@ class MultiTurnCIRSystem:
                 
                 return False
             else:
-                # CIRCO: ハッシュ値から実際のファイル名に変換
+                # CIRCO: Convert hash value to actual filename
                 if image_id in self.hash_to_filename:
                     filename = self.hash_to_filename[image_id]
                     image_path = os.path.join(image_dir, filename)
                     return os.path.exists(image_path)
                 else:
-                    # ハッシュ値でない場合（12桁形式）はそのまま使用
+                    # If not hash value (12-digit format), use as-is
                     image_path = os.path.join(image_dir, image_id)
                     return os.path.exists(image_path)
         
-        # 欠損分析
+        # Missing data analysis
         print("Checking image file existence...")
         missing_ref_images = [img_id for img_id in reference_ids if not check_image_exists(img_id)]
         missing_target_images = [img_id for img_id in target_ids if not check_image_exists(img_id)]
         missing_gt_images = [img_id for img_id in gt_ids if not check_image_exists(img_id)]
         
-        # 検索空間の画像IDセット
+        # Image ID set in search space
         search_space_set = set(self.retrieval_engine.search_space)
         missing_ref_search = reference_ids - search_space_set
         missing_target_search = target_ids - search_space_set
         missing_gt_search = gt_ids - search_space_set
         
-        # 利用可能なキャプション特徴量も参考情報として表示
+        # Also display available caption features as reference
         available_caption_features = set(self.caption_features.keys())
         missing_ref_features = reference_ids - available_caption_features
         missing_target_features = target_ids - available_caption_features
         missing_gt_features = gt_ids - available_caption_features
         
-        # 結果をまとめ
+        # Summarize results
         completeness_info = {
             'total_queries': len(self.data),
             'image_dir': image_dir,
@@ -2413,7 +2413,7 @@ class MultiTurnCIRSystem:
             }
         }
         
-        # 詳細レポート出力
+        # Output detailed report
         print(f"Total queries: {completeness_info['total_queries']}")
         print(f"Image directory: {image_dir}")
         print(f"Available caption features: {completeness_info['available_caption_features']}")
@@ -2437,7 +2437,7 @@ class MultiTurnCIRSystem:
         print(f"  Missing caption features: {completeness_info['ground_truth_images']['missing_caption_features']}")
         print(f"  Missing in search space: {completeness_info['ground_truth_images']['missing_in_search_space']}")
         
-        # 処理可能なクエリの推定（画像ファイル存在ベース）
+        # Estimate processable queries (based on image file existence)
         processable_queries = 0
         for query_item in self.data:
             gt_available = all(check_image_exists(gt_id) for gt_id in query_item['ground_truth_ids'])
@@ -2450,7 +2450,7 @@ class MultiTurnCIRSystem:
         print(f"\nEstimated processable queries (based on image files): {processable_queries}/{len(self.data)} "
               f"({processable_queries/len(self.data)*100:.1f}%)")
         
-        # 欠損画像のサンプルを表示（デバッグ用）
+        # Display sample of missing images (for debugging)
         if missing_gt_images:
             sample_missing = missing_gt_images[:5]
             print(f"\nSample missing GT image files: {sample_missing}")
@@ -2463,8 +2463,8 @@ class MultiTurnCIRSystem:
         return completeness_info
 
 def main():
-    """メイン関数"""
-    # コマンドライン引数のパーサーを作成
+    """Main function"""
+    # Create command line argument parser
     parser = argparse.ArgumentParser(description='Multi-turn CIR System')
     parser.add_argument('--dataset', type=str, default='circo', 
                        choices=['circo', 'cirr_train', 'cirr_val', 
@@ -2485,7 +2485,7 @@ def main():
     
     args = parser.parse_args()
     
-    # グローバルなデバイス設定を更新
+    # Update global device setting
     global device
     if args.device == 'auto':
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -2494,18 +2494,18 @@ def main():
     
     print(f"Using device: {device}")
     
-    # 設定
+    # Configuration
     datasets_config = {
         'circo': {
             'annotation_file': 'CIRCO/annotations/val.json',
-            'corpus_vectors_file': 'CIRCO/features_blip.pt',  # BLIPの特徴量ファイル
-            'search_space_file': 'CIRCO/metadata_blip.pt',    # 検索空間のメタデータ
-            'image_dir': 'CIRCO/COCO2017_unlabeled/unlabeled2017',  # COCO2017 unlabeled 120k画像プール
-            'caption_file': 'CIRCO/captions_gpt4omini.json',     # GPT-4o-miniキャプション
-            'gpt4omini_caption_features_file': 'CIRCO/gpt4omini_captions_blip_features.pt',  # gpt4ominiキャプション特徴量
+            'corpus_vectors_file': 'CIRCO/features_blip.pt',  # BLIP feature file
+            'search_space_file': 'CIRCO/metadata_blip.pt',    # Search space metadata
+            'image_dir': 'CIRCO/COCO2017_unlabeled/unlabeled2017',  # COCO2017 unlabeled 120k image pool
+            'caption_file': 'CIRCO/captions_gpt4omini.json',     # GPT-4o-mini captions
+            'gpt4omini_caption_features_file': 'CIRCO/gpt4omini_captions_blip_features.pt',  # gpt4omini caption features
             'use_blip': True,
             'max_turns': args.max_turns,
-            'dataset_split': 'val',  # testは正解ラベル非公開のためval使用
+            'dataset_split': 'val',  # Using val because test ground truth labels are not public
             'caption_mode': 'combined'
         },
         'cirr_train': {
@@ -2521,18 +2521,18 @@ def main():
             'caption_mode': 'combined'
         },
         'cirr_val': {
-            'annotation_file': 'cirr/captions/cap.rc2.val.json',  # valセット使用（testは正解非公開）
-            'corpus_vectors_file': 'cirr/features_blip.pt',       # BLIPの特徴量ファイル
-            'search_space_file': 'cirr/image_splits/split.rc2.val.json',  # val画像プール
-            'image_dir': 'cirr/img_raw',                          # CIRR画像ディレクトリ
-            'caption_file': 'cirr/captions_gpt4omini.json',          # GPT-4o-miniキャプション
-            'gpt4omini_caption_features_file': 'cirr/gpt4omini_captions_blip_features.pt',  # gpt4ominiキャプション特徴量
+            'annotation_file': 'cirr/captions/cap.rc2.val.json',  # Using val set (test ground truth not public)
+            'corpus_vectors_file': 'cirr/features_blip.pt',       # BLIP feature file
+            'search_space_file': 'cirr/image_splits/split.rc2.val.json',  # val image pool
+            'image_dir': 'cirr/img_raw',                          # CIRR image directory
+            'caption_file': 'cirr/captions_gpt4omini.json',          # GPT-4o-mini captions
+            'gpt4omini_caption_features_file': 'cirr/gpt4omini_captions_blip_features.pt',  # gpt4omini caption features
             'use_blip': True,
             'max_turns': args.max_turns,
-            'dataset_split': 'val',  # testは正解ラベル非公開のためval使用
+            'dataset_split': 'val',  # Using val because test ground truth labels are not public
             'caption_mode': 'combined'
         },
-        # Fashion-IQ Dress カテゴリ
+        # Fashion-IQ Dress category
         'fashioniq_dress_train': {
             'annotation_file': 'fashion-iq/captions/cap.dress.train.json',
             'corpus_vectors_file': 'fashion-iq/features_blip.pt',
@@ -2557,7 +2557,7 @@ def main():
             'dataset_split': 'val',
             'caption_mode': args.caption_mode
         },
-        # Fashion-IQ Shirt カテゴリ
+        # Fashion-IQ Shirt category
         'fashioniq_shirt_train': {
             'annotation_file': 'fashion-iq/captions/cap.shirt.train.json',
             'corpus_vectors_file': 'fashion-iq/features_blip.pt',
@@ -2582,7 +2582,7 @@ def main():
             'dataset_split': 'val',
             'caption_mode': args.caption_mode
         },
-        # Fashion-IQ Toptee カテゴリ
+        # Fashion-IQ Toptee category
         'fashioniq_toptee_train': {
             'annotation_file': 'fashion-iq/captions/cap.toptee.train.json',
             'corpus_vectors_file': 'fashion-iq/features_blip.pt',
@@ -2609,7 +2609,7 @@ def main():
         }
     }
     
-    # 実行するデータセットを選択
+    # Select dataset to run
     dataset_name = args.dataset
     
     if dataset_name not in datasets_config:
@@ -2618,20 +2618,20 @@ def main():
     
     config = datasets_config[dataset_name]
     
-    # Fashion-IQデータセットの場合、キャプション処理方式を設定
+    # For Fashion-IQ dataset, set caption processing mode
     if dataset_name.startswith('fashioniq'):
         config['caption_mode'] = args.caption_mode
         print(f"Using caption mode: {args.caption_mode}")
     
-    # システムを初期化
+    # Initialize system
     system = MultiTurnCIRSystem(dataset_name, config)
     
-    # テストモードの場合は制限
+    # Limit for test mode
     if args.test_mode:
         print("Running in test mode - limiting to first 5 queries")
         system.data = system.data[:5]
     
-    # 再開機能の説明
+    # Resume functionality explanation
     if len(system.results) == 0:
         print(f"\n=== Starting Fresh Evaluation ===")
         print(f"No existing results found. Starting evaluation from the beginning.")
@@ -2650,7 +2650,7 @@ def main():
         system.print_statistics()
         return
     
-    # 評価を実行
+    # Run evaluation
     system.run_evaluation()
 
 if __name__ == "__main__":

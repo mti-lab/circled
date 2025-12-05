@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-最適化されたマルチターンCIRデータフィルタリングシステム
-既存のJSONとCSVファイルを活用した効率的なフィルタリング
+Optimized multi-turn CIR data filtering system.
+Efficient filtering utilizing existing JSON and CSV files.
 """
 
 import json
@@ -28,13 +28,13 @@ except ImportError:
     print("Warning: CLIP not available. CLIP similarity filtering will be disabled.")
 
 class OptimizedMultiTurnFilter:
-    """既存データを活用した最適化されたマルチターンCIRフィルタリングシステム"""
+    """Optimized multi-turn CIR filtering system utilizing existing data"""
     
     def __init__(self, similarity_threshold: float = 0.8, rank_margin: int = 30):
         """
         Args:
-            similarity_threshold: CLIP類似度の閾値
-            rank_margin: ランクマージンの閾値
+            similarity_threshold: CLIP similarity threshold
+            rank_margin: Rank margin threshold
         """
         self.similarity_threshold = similarity_threshold
         self.rank_margin = rank_margin
@@ -42,7 +42,7 @@ class OptimizedMultiTurnFilter:
         # self.device = "cpu"
         self.clip_available = CLIP_AVAILABLE
         
-        # CLIP初期化
+        # CLIP initialization
         if self.clip_available:
             try:
                 self.clip_model, self.clip_preprocess = clip.load("ViT-B/32", device=self.device)
@@ -51,11 +51,11 @@ class OptimizedMultiTurnFilter:
                 print(f"Failed to load CLIP: {e}")
                 self.clip_available = False
         
-        # 画像ハッシュマッピング
+        # Image hash mapping
         self.image_id_to_hash = {}
     
     def _compute_image_hash(self, image_path: str) -> str:
-        """画像ファイルのMD5ハッシュを計算"""
+        """Compute MD5 hash of image file"""
         try:
             with open(image_path, 'rb') as f:
                 file_hash = hashlib.md5(f.read()).hexdigest()
@@ -65,11 +65,11 @@ class OptimizedMultiTurnFilter:
             return None
     
     def _initialize_fashioniq_hash_mapping(self, dataset_name: str):
-        """FashionIQ画像のハッシュマッピングを初期化"""
+        """Initialize hash mapping for FashionIQ images"""
         category = dataset_name.split('_')[1] if '_' in dataset_name else 'dress'
         image_dir = f'fashion-iq/images'
-        
-        # スプリットファイルから画像IDを取得
+
+        # Get image IDs from split files
         splits = ['train', 'val', 'test']
         for split in splits:
             split_file = f'fashion-iq/image_splits/split.{category}.{split}.json'
@@ -87,10 +87,10 @@ class OptimizedMultiTurnFilter:
                             self.image_id_to_hash[f"{image_id}.jpg"] = img_hash
 
     def _initialize_cirr_hash_mapping(self, dataset_name: str):
-        """CIRR画像のハッシュマッピングを初期化"""
+        """Initialize hash mapping for CIRR images"""
         image_dir = 'cirr/img_raw'
-        
-        # スプリットファイルから画像IDを取得
+
+        # Get image IDs from split files
         splits = ['train', 'val', 'test1']
         for split in splits:
             split_file = f'cirr/image_splits/split.rc2.{split}.json'
@@ -99,7 +99,7 @@ class OptimizedMultiTurnFilter:
                     split_data = json.load(f)
                 
                 for image_id, relative_path in split_data.items():
-                    # relative_pathは "./train/34/train-11041-2-img0.png" のような形式
+                    # relative_path is in format like "./train/34/train-11041-2-img0.png"
                     full_path = os.path.join(image_dir, relative_path.lstrip('./'))
                     
                     if os.path.exists(full_path):
@@ -108,11 +108,11 @@ class OptimizedMultiTurnFilter:
                             self.image_id_to_hash[image_id] = img_hash
 
     def _initialize_circo_hash_mapping(self, dataset_name: str):
-        """CIRCO画像のハッシュマッピングを初期化"""
+        """Initialize hash mapping for CIRCO images"""
         try:
             import torch
             
-            # CIRCOのメタデータファイルから既存のハッシュマッピングを読み込み
+            # Load existing hash mapping from CIRCO metadata file
             metadata_file = 'CIRCO/metadata_blip.pt'
             if not os.path.exists(metadata_file):
                 print(f"Warning: CIRCO metadata file not found: {metadata_file}")
@@ -122,7 +122,7 @@ class OptimizedMultiTurnFilter:
             hash_to_idx = metadata['hash_to_idx']
             idx_to_info = metadata['idx_to_info']
             
-            # ハッシュ→ファイル名のマッピングを作成
+            # Create hash to filename mapping
             hash_to_filename = {}
             for hash_val, idx in hash_to_idx.items():
                 info = idx_to_info.get(idx, {})
@@ -131,12 +131,12 @@ class OptimizedMultiTurnFilter:
                     filename = f"{int(image_id):012d}.jpg"
                     hash_to_filename[hash_val] = filename
             
-            # 画像ID→ハッシュのマッピングを作成
+            # Create image ID to hash mapping
             for hash_val, filename in hash_to_filename.items():
-                # ファイル名から画像IDを抽出（例：000000000001.jpg → 1）
+                # Extract image ID from filename (e.g., 000000000001.jpg → 1)
                 image_id = filename.replace('.jpg', '').lstrip('0') or '0'
                 self.image_id_to_hash[image_id] = hash_val
-                # 12桁形式も追加
+                # Also add 12-digit format
                 padded_id = f"{int(image_id):012d}"
                 self.image_id_to_hash[padded_id] = hash_val
                 
@@ -146,15 +146,15 @@ class OptimizedMultiTurnFilter:
             print(f"Warning: Failed to load CIRCO metadata: {e}")
 
     def get_image_hash(self, image_id: str) -> str:
-        """画像IDからハッシュ値を取得"""
+        """Get hash value from image ID"""
         if not image_id:
             return None
             
-        # 直接マッチを試す
+        # Try direct match
         if image_id in self.image_id_to_hash:
             return self.image_id_to_hash[image_id]
         
-        # 拡張子の有無を考慮
+        # Consider with/without extension
         if image_id.endswith('.jpg'):
             base_id = image_id[:-4]
             if base_id in self.image_id_to_hash:
@@ -164,7 +164,7 @@ class OptimizedMultiTurnFilter:
             if jpg_id in self.image_id_to_hash:
                 return self.image_id_to_hash[jpg_id]
         
-        # CIRCOの場合、12桁形式も試す
+        # For CIRCO, also try 12-digit format
         if hasattr(self, 'dataset_name') and self.dataset_name == 'circo':
             try:
                 padded_id = f"{int(image_id):012d}"
@@ -173,9 +173,9 @@ class OptimizedMultiTurnFilter:
             except ValueError:
                 pass
         
-        # FashionIQの場合、追加のパターンを試す
+        # For FashionIQ, try additional patterns
         if hasattr(self, 'dataset_name') and self.dataset_name.startswith('fashioniq'):
-            # B00006M009.jpg のような形式を試す
+            # Try formats like B00006M009.jpg
             variations = [
                 image_id,
                 f"{image_id}.jpg",
@@ -186,7 +186,7 @@ class OptimizedMultiTurnFilter:
                 if variation in self.image_id_to_hash:
                     return self.image_id_to_hash[variation]
         
-        # デバッグ用（最初の数個のみ表示）
+        # For debugging (display only first few)
         if not hasattr(self, '_hash_miss_count'):
             self._hash_miss_count = 0
         
@@ -199,33 +199,33 @@ class OptimizedMultiTurnFilter:
         return None
     
     def load_dataset_files(self, dataset_name: str) -> Tuple[Dict, pd.DataFrame, pd.DataFrame]:
-        """データセットファイルを読み込み（JSONのみでも対応）"""
-        # ファイルパス
+        """Load dataset files (also works with JSON only)"""
+        # File paths
         json_file = f"multiturn_cir_results_{dataset_name}.json"
         summary_file = f"multiturn_cir_summary_{dataset_name}.csv"
         detailed_file = f"multiturn_cir_detailed_rankings_{dataset_name}.csv"
         
-        # JSONファイルの存在確認
+        # Check if JSON file exists
         if not os.path.exists(json_file):
             raise FileNotFoundError(f"Required JSON file not found: {json_file}")
         
-        # データ読み込み
+        # Load data
         print(f"Loading {dataset_name} data...")
         
-        # JSON結果
+        # JSON results
         with open(json_file, 'r') as f:
             json_data = json.load(f)
         
-        # CSVファイルの存在確認
+        # Check if CSV files exist
         csv_files_exist = os.path.exists(summary_file) and os.path.exists(detailed_file)
         
         if csv_files_exist:
-            # CSVファイルが存在する場合（FashionIQ等）
+            # If CSV files exist (FashionIQ etc.)
             summary_df = pd.read_csv(summary_file)
             detailed_df = pd.read_csv(detailed_file)
             print(f"Loaded: {len(json_data['results'])} results, {len(summary_df)} summary rows, {len(detailed_df)} detailed rows")
         else:
-            # CSVファイルが存在しない場合（CIRCO, CIRR等）- JSONから生成
+            # If CSV files don't exist (CIRCO, CIRR etc.) - generate from JSON
             print(f"CSV files not found. Generating from JSON data...")
             summary_df, detailed_df = self._generate_dataframes_from_json(json_data)
             print(f"Loaded: {len(json_data['results'])} results, {len(summary_df)} summary rows (generated), {len(detailed_df)} detailed rows (generated)")
@@ -233,7 +233,7 @@ class OptimizedMultiTurnFilter:
         return json_data, summary_df, detailed_df
     
     def _generate_dataframes_from_json(self, json_data: Dict) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """JSONデータからCSV相当のDataFrameを生成"""
+        """Generate CSV-equivalent DataFrames from JSON data"""
         summary_data = []
         detailed_data = []
         
@@ -244,12 +244,12 @@ class OptimizedMultiTurnFilter:
             turns = result.get('turns', [])
             total_turns = len(turns)
             
-            # 最初と最後のランクから改善値を計算
+            # Calculate improvement from first and last ranks
             initial_rank = turns[0].get('best_gt_rank', float('inf')) if turns else float('inf')
             final_rank = turns[-1].get('best_gt_rank', float('inf')) if turns else float('inf')
             rank_improvement = initial_rank - final_rank if initial_rank != float('inf') and final_rank != float('inf') else 0
             
-            # サマリーデータ
+            # Summary data
             summary_data.append({
                 'query_id': query_id,
                 'success': success,
@@ -260,7 +260,7 @@ class OptimizedMultiTurnFilter:
                 'final_rank': final_rank
             })
             
-            # 詳細データ（各ターン）
+            # Detailed data (each turn)
             for turn_data in turns:
                 detailed_data.append({
                     'query_id': query_id,
@@ -277,9 +277,9 @@ class OptimizedMultiTurnFilter:
         return summary_df, detailed_df
     
     def get_clip_text_feature(self, text: str) -> np.ndarray:
-        """CLIPテキスト特徴量を取得"""
+        """Get CLIP text features"""
         if not self.clip_available:
-            return np.random.rand(512)  # ダミー特徴量
+            return np.random.rand(512)  # Dummy features
         
         with torch.no_grad():
             tokens = clip.tokenize(text, truncate=True).to(self.device)
@@ -287,15 +287,15 @@ class OptimizedMultiTurnFilter:
             return normalize(feat, dim=-1).squeeze(0).cpu().numpy()
     
     def apply_success_filter(self, json_data: Dict, summary_df: pd.DataFrame) -> List[int]:
-        """成功フィルタを適用"""
-        # JSONデータから直接成功クエリを特定
+        """Apply success filter"""
+        # Identify successful queries directly from JSON data
         successful_query_ids = []
         
         for result in json_data['results']:
             try:
                 query_id = int(result['query_id'])
                 
-                # 結果レベルのsuccessフィールドを確認
+                # Check success field at result level
                 if result.get('success', False):
                     successful_query_ids.append(query_id)
                     
@@ -305,8 +305,8 @@ class OptimizedMultiTurnFilter:
         return successful_query_ids
 
     def apply_multiturn_filter(self, json_data: Dict, query_ids: List[int]) -> List[int]:
-        """マルチターンフィルタを適用（ターン1以降で成功したもののみ）"""
-        # JSONの結果を辞書に変換
+        """Apply multi-turn filter (only those that succeeded at turn 1 or later)"""
+        # Convert JSON results to dictionary
         results_dict = {}
         for result in json_data['results']:
             try:
@@ -324,15 +324,15 @@ class OptimizedMultiTurnFilter:
             result = results_dict[query_id]
             success_turn = result.get('success_turn', 0)
             
-            # マルチターン（ターン1以降で成功）の条件
+            # Multi-turn condition (success at turn 1 or later)
             if success_turn > 0:
                 multiturn_query_ids.append(query_id)
         
         return multiturn_query_ids
 
     def apply_original_query_filter(self, json_data: Dict, query_ids: List[int]) -> List[int]:
-        """オリジナルクエリフィルタを適用（original_queryが空のクエリを除外）"""
-        # JSONの結果を辞書に変換
+        """Apply original query filter (exclude queries with empty original_query)"""
+        # Convert JSON results to dictionary
         results_dict = {}
         for result in json_data['results']:
             try:
@@ -351,7 +351,7 @@ class OptimizedMultiTurnFilter:
             result = results_dict[query_id]
             original_query = result.get('original_query', '')
             
-            # original_queryが存在し、空でない場合のみ保持
+            # Keep only if original_query exists and is not empty
             if original_query and original_query.strip():
                 valid_query_ids.append(query_id)
             else:
@@ -361,9 +361,9 @@ class OptimizedMultiTurnFilter:
         return valid_query_ids
 
     def apply_rank_margin_filter(self, json_data: Dict, detailed_df: pd.DataFrame, query_ids: List[int]) -> List[int]:
-        """ランクマージンフィルタを適用（前ターンから30以上ランクが悪化した場合に除外）"""
-        
-        # JSONクエリIDを整数に変換して収集
+        """Apply rank margin filter (exclude if rank degraded by 30+ from previous turn)"""
+
+        # Collect JSON query IDs converted to integers
         json_query_ids = set()
         for result in json_data['results']:
             try:
@@ -374,38 +374,38 @@ class OptimizedMultiTurnFilter:
         
         csv_query_ids = set(detailed_df['query_id'].tolist())
         
-        # 共通のクエリIDのみを対象とする
+        # Only target common query IDs
         valid_query_ids = [qid for qid in query_ids if qid in json_query_ids and qid in csv_query_ids]
         
         print(f"Debug: JSON IDs: {len(json_query_ids)}, CSV IDs: {len(csv_query_ids)}, Valid IDs: {len(valid_query_ids)}")
         
         if len(valid_query_ids) == 0:
             print("Warning: No common query IDs found between JSON and CSV data - skipping rank margin filter")
-            return query_ids  # ランクマージンフィルタをスキップ
+            return query_ids  # Skip rank margin filter
         
         filtered_query_ids = []
         
         for query_id in tqdm(valid_query_ids, desc="Rank margin filtering"):
-            # 該当クエリのランキングデータを取得
+            # Get ranking data for the query
             query_ranks = detailed_df[detailed_df['query_id'] == query_id].sort_values('turn')
             
             if len(query_ranks) <= 1:
-                # シングルターンの場合は除外
+                # Exclude single-turn cases
                 continue
             
             ranks = query_ranks['best_gt_rank'].tolist()
             
-            # float('inf')を除外して有効なランクのみを処理
+            # Process only valid ranks, excluding float('inf')
             valid_ranks = [r for r in ranks if r != float('inf')]
             if len(valid_ranks) <= 1:
-                # 有効なランクが1つ以下の場合はスキップ
+                # Skip if there's one or fewer valid ranks
                 continue
             
             keep = True
             
-            # 連続するターン間でランクマージンをチェック
+            # Check rank margin between consecutive turns
             for i in range(1, len(valid_ranks)):
-                # ランクが30以上悪化した場合（数値が大きくなった場合）
+                # If rank degraded by 30 or more (numerical value increased)
                 if valid_ranks[i] > valid_ranks[i-1] + self.rank_margin:
                     keep = False
                     break
@@ -413,19 +413,19 @@ class OptimizedMultiTurnFilter:
             if keep:
                 filtered_query_ids.append(query_id)
         
-        # 元のquery_idsに含まれていたが、CSVに存在しないクエリIDも含める
+        # Include query IDs that were in original query_ids but not in CSV
         missing_ids = [qid for qid in query_ids if qid not in csv_query_ids]
         filtered_query_ids.extend(missing_ids)
         
         return filtered_query_ids
     
     def apply_clip_similarity_filter(self, json_data: Dict, query_ids: List[int]) -> List[int]:
-        """CLIP類似度フィルタを適用"""
+        """Apply CLIP similarity filter"""
         if not self.clip_available:
             print("CLIP not available, skipping similarity filter")
             return query_ids
         
-        # JSONの結果を辞書に変換（整数IDをキーとして使用）
+        # Convert JSON results to dictionary (using integer IDs as keys)
         results_dict = {}
         for result in json_data['results']:
             try:
@@ -438,23 +438,23 @@ class OptimizedMultiTurnFilter:
         
         for query_id in tqdm(query_ids, desc="CLIP similarity filtering"):
             if query_id not in results_dict:
-                # JSONに存在しないクエリIDはスキップ
+                # Skip query IDs not found in JSON
                 continue
             
             result = results_dict[query_id]
             turns = result.get('turns', [])
             
             if len(turns) <= 1:
-                # シングルターンは類似度フィルタの対象外
+                # Single-turn is not subject to similarity filter
                 filtered_query_ids.append(query_id)
                 continue
             
-            # 修正テキストの類似度チェック
+            # Check modification text similarity
             past_features = []
             keep = True
             
             for i, turn in enumerate(turns):
-                # 修正テキストを取得
+                # Get modification text
                 if i == 0:
                     modification_text = result.get('original_query', '')
                 else:
@@ -465,7 +465,7 @@ class OptimizedMultiTurnFilter:
                 
                 feat = self.get_clip_text_feature(modification_text)
                 
-                # 過去の特徴量との類似度チェック
+                # Check similarity with past features
                 for prev_feat in past_features:
                     similarity = np.dot(feat, prev_feat)
                     if similarity >= self.similarity_threshold:
@@ -483,9 +483,9 @@ class OptimizedMultiTurnFilter:
         return filtered_query_ids
     
     def apply_image_duplication_filter(self, json_data: Dict, query_ids: List[int]) -> List[int]:
-        """画像重複フィルタを適用（同一ダイアログ内で同じ画像を複数回選択したクエリ、およびselected_imageとreference_imageが重複するクエリを除外）"""
+        """Apply image duplication filter (exclude queries that select the same image multiple times within a dialog, and queries where selected_image duplicates reference_image)"""
         
-        # JSONの結果を辞書に変換
+        # Convert JSON results to dictionary
         results_dict = {}
         for result in json_data['results']:
             try:
@@ -493,8 +493,8 @@ class OptimizedMultiTurnFilter:
                 results_dict[query_id] = result
             except (ValueError, TypeError):
                 continue
-        
-        # 統計情報収集用
+
+        # For collecting statistics
         hash_success_count = 0
         hash_failure_count = 0
         total_images_processed = 0
@@ -508,14 +508,14 @@ class OptimizedMultiTurnFilter:
         print("Checking for image duplication within individual dialogs and reference-selected duplications...")
         for query_id in tqdm(query_ids, desc="Processing queries"):
             if query_id not in results_dict:
-                # クエリが見つからない場合はスキップ
+                # Skip if query not found
                 continue
             
             result = results_dict[query_id]
             turns = result.get('turns', [])
             reference_image_id = result.get('reference_image_id', '')
             
-            # reference_imageのハッシュを取得
+            # Get hash of reference_image
             reference_hash = None
             if reference_image_id:
                 reference_hash = self.get_image_hash(reference_image_id)
@@ -525,9 +525,9 @@ class OptimizedMultiTurnFilter:
                     hash_failure_count += 1
                 total_images_processed += 1
             
-            # このダイアログで選択された画像のハッシュを追跡
+            # Track hashes of images selected in this dialog
             dialog_image_hashes = []
-            dialog_images_info = []  # デバッグ用
+            dialog_images_info = []  # For debugging
             has_duplicate_in_dialog = False
             has_reference_selected_duplicate = False
             
@@ -542,10 +542,10 @@ class OptimizedMultiTurnFilter:
                     if image_hash:
                         hash_success_count += 1
                         
-                        # reference_imageとselected_imageの重複チェック
+                        # Check for duplication between reference_image and selected_image
                         if reference_hash and image_hash == reference_hash:
                             has_reference_selected_duplicate = True
-                            # 重複例を記録（最初の数例のみ）
+                            # Record duplication examples (first few only)
                             if len(reference_selected_examples) < 5:
                                 reference_selected_examples.append({
                                     'query_id': query_id,
@@ -556,10 +556,10 @@ class OptimizedMultiTurnFilter:
                                 })
                             break
                         
-                        # このダイアログ内で既に同じハッシュの画像が選択されているかチェック
+                        # Check if an image with the same hash was already selected in this dialog
                         if image_hash in dialog_image_hashes:
                             has_duplicate_in_dialog = True
-                            # 重複例を記録（最初の数例のみ）
+                            # Record duplication examples (first few only)
                             if len(duplicate_examples) < 5:
                                 duplicate_turn = dialog_image_hashes.index(image_hash)
                                 duplicate_examples.append({
@@ -575,10 +575,10 @@ class OptimizedMultiTurnFilter:
                             dialog_images_info.append((turn_num, selected_image, image_hash[:8] + '...'))
                     else:
                         hash_failure_count += 1
-                        # ハッシュが取得できない場合は重複チェックをスキップ
+                        # Skip duplication check if hash cannot be obtained
                         dialog_images_info.append((turn_num, selected_image, 'NO_HASH'))
             
-            # ダイアログ内で重複がなく、reference-selected重複もない場合のみ保持
+            # Keep only if there's no duplication within dialog and no reference-selected duplication
             if not has_duplicate_in_dialog and not has_reference_selected_duplicate:
                 filtered_query_ids.append(query_id)
             else:
@@ -587,12 +587,12 @@ class OptimizedMultiTurnFilter:
                 if has_reference_selected_duplicate:
                     reference_selected_duplicate_count += 1
         
-        # 統計情報を表示
+        # Display statistics
         print(f"Hash statistics: {hash_success_count} success, {hash_failure_count} failures out of {total_images_processed} total images")
         print(f"Image duplication filter: {duplicate_within_dialog_count} queries removed for selecting duplicate images within same dialog")
         print(f"Reference-Selected duplication filter: {reference_selected_duplicate_count} queries removed for selecting reference image as selected image")
         
-        # 重複例を表示
+        # Display duplication examples
         if duplicate_examples:
             print(f"Examples of within-dialog duplications:")
             for i, example in enumerate(duplicate_examples):
@@ -607,30 +607,30 @@ class OptimizedMultiTurnFilter:
         return filtered_query_ids
     
     def create_filtered_dataset(self, json_data: Dict, filtered_query_ids: List[int]) -> Dict:
-        """フィルタリング済みデータセットを作成（元のダイアログ構造を保持）"""
+        """Create filtered dataset (preserving original dialog structure)"""
         filtered_results = []
-        filtered_query_ids_set = set(filtered_query_ids)  # 高速な検索のためにセットに変換
+        filtered_query_ids_set = set(filtered_query_ids)  # Convert to set for faster lookup
         
-        # 元のresultsリストから直接フィルタリング
+        # Filter directly from original results list
         for result in json_data['results']:
             try:
-                # query_idを整数として取得
+                # Get query_id as integer
                 query_id = int(result['query_id'])
-                # フィルタリング済みクエリIDに含まれるかを確認
+                # Check if query ID is in filtered query IDs
                 if query_id in filtered_query_ids_set:
-                    # 同じクエリIDでも個別にsuccess_turnをチェック
+                    # Check success_turn individually even for same query ID
                     success_turn = result.get('success_turn', 0)
-                    if success_turn > 0:  # マルチターンフィルタの条件を再適用
+                    if success_turn > 0:  # Re-apply multi-turn filter condition
                         filtered_results.append(result)
-                    # success_turn == 0 の場合は除外（ログ出力）
+                    # Exclude if success_turn == 0 (with log output)
                     elif success_turn == 0:
                         print(f"Debug: Excluding duplicate entry with success_turn=0 for query_id {query_id}")
             except (ValueError, TypeError):
-                # query_idの変換に失敗した場合は警告を出力してスキップ
+                # Output warning and skip if query_id conversion fails
                 print(f"Warning: Invalid query_id in create_filtered_dataset: {result.get('query_id', 'None')}")
                 continue
         
-        # 元のデータ構造を保持してフィルタリング済みデータセットを作成
+        # Create filtered dataset while preserving original data structure
         filtered_data = {
             'dataset_name': json_data.get('dataset_name', ''),
             'config': json_data.get('config', {}),
@@ -642,14 +642,14 @@ class OptimizedMultiTurnFilter:
                 'filtering_rate': len(filtered_results) / len(json_data['results']) * 100 if len(json_data['results']) > 0 else 0,
                 'similarity_threshold': self.similarity_threshold,
                 'rank_margin': self.rank_margin,
-                'applied_filters': []  # 適用されたフィルタの情報を後で追加
+                'applied_filters': []  # Add applied filter info later
             }
         }
         
         return filtered_data
     
     def analyze_filtering_effects(self, summary_df: pd.DataFrame, filtered_query_ids: List[int]) -> Dict:
-        """フィルタリング効果を分析"""
+        """Analyze filtering effects"""
         original_df = summary_df
         filtered_df = summary_df[summary_df['query_id'].isin(filtered_query_ids)]
         
@@ -679,14 +679,14 @@ class OptimizedMultiTurnFilter:
                        apply_rank_margin: bool = True, apply_clip_similarity: bool = True,
                        apply_image_duplication: bool = True,
                        save_filtered: bool = True) -> Dict:
-        """データセットフィルタリングを実行"""
+        """Execute dataset filtering"""
         
         print(f"Starting filtering for dataset: {dataset_name}")
         
-        # データセット名を保存
+        # Save dataset name
         self.dataset_name = dataset_name
         
-        # 画像ハッシュマッピングの初期化
+        # Initialize image hash mapping
         if apply_image_duplication:
             print("Initializing image hash mapping...")
             if dataset_name.startswith('fashioniq'):
@@ -705,14 +705,14 @@ class OptimizedMultiTurnFilter:
         print(f"=== Filtering {dataset_name} ===")
         print(f"Loading {dataset_name} data...")
         
-        # データ読み込み
+        # Load data
         json_data, summary_df, detailed_df = self.load_dataset_files(dataset_name)
         print(f"Loaded: {len(json_data['results'])} results, {len(summary_df)} summary rows, {len(detailed_df)} detailed rows")
         
-        # フィルタリング段階を記録
+        # Record filtering stages
         filtering_stages = []
         
-        # 初期状態 - 実際のquery_idを取得
+        # Initial state - get actual query_ids
         initial_count = len(json_data['results'])
         current_query_ids = []
         for result in json_data['results']:
@@ -720,13 +720,13 @@ class OptimizedMultiTurnFilter:
                 query_id = int(result['query_id'])
                 current_query_ids.append(query_id)
             except (ValueError, TypeError):
-                # query_idの変換に失敗した場合は警告を出力してスキップ
+                # Output warning and skip if query_id conversion fails
                 print(f"Warning: Invalid query_id found: {result.get('query_id', 'None')}")
                 continue
         
         print(f"Initial queries: {len(current_query_ids)} (valid query_ids extracted)")
         
-        # 1. 成功フィルタ
+        # 1. Success filter
         if apply_success:
             print("Applying success filter...")
             successful_query_ids = self.apply_success_filter(json_data, summary_df)
@@ -741,7 +741,7 @@ class OptimizedMultiTurnFilter:
         else:
             successful_query_ids = current_query_ids
         
-        # 2. マルチターンフィルタ
+        # 2. Multi-turn filter
         if apply_multiturn and len(current_query_ids) > 0:
             print("Applying multiturn filter...")
             pre_multiturn_count = len(current_query_ids)
@@ -754,7 +754,7 @@ class OptimizedMultiTurnFilter:
             })
             print(f"Multiturn filter: {len(current_query_ids)}/{len(successful_query_ids) if apply_success else initial_count} ({len(current_query_ids)/(len(successful_query_ids) if apply_success else initial_count)*100:.1f}%)")
         
-        # 3. オリジナルクエリフィルタ
+        # 3. Original query filter
         if apply_original_query and len(current_query_ids) > 0:
             print("Applying original query filter...")
             pre_original_count = len(current_query_ids)
@@ -767,7 +767,7 @@ class OptimizedMultiTurnFilter:
             })
             print(f"Original query filter: {len(current_query_ids)}/{len(successful_query_ids) if apply_success else initial_count} ({len(current_query_ids)/(len(successful_query_ids) if apply_success else initial_count)*100:.1f}%)")
         
-        # 4. ランクマージンフィルタ
+        # 4. Rank margin filter
         if apply_rank_margin and len(current_query_ids) > 0:
             print("Applying rank margin filter...")
             pre_rank_count = len(current_query_ids)
@@ -780,7 +780,7 @@ class OptimizedMultiTurnFilter:
             })
             print(f"Rank margin filter: {len(current_query_ids)}/{len(successful_query_ids) if apply_success else initial_count} ({len(current_query_ids)/(len(successful_query_ids) if apply_success else initial_count)*100:.1f}%)")
         
-        # 5. CLIP類似度フィルタ
+        # 5. CLIP similarity filter
         if apply_clip_similarity and len(current_query_ids) > 0:
             print("Applying CLIP similarity filter...")
             pre_clip_count = len(current_query_ids)
@@ -793,7 +793,7 @@ class OptimizedMultiTurnFilter:
             })
             print(f"CLIP similarity filter: {len(current_query_ids)}/{len(successful_query_ids) if apply_success else initial_count} ({len(current_query_ids)/(len(successful_query_ids) if apply_success else initial_count)*100:.1f}%)")
         
-        # 6. 画像重複フィルタ
+        # 6. Image duplication filter
         if apply_image_duplication and len(current_query_ids) > 0:
             print("Applying image duplication filter...")
             pre_duplication_count = len(current_query_ids)
@@ -806,10 +806,10 @@ class OptimizedMultiTurnFilter:
             })
             print(f"Image duplication filter: {len(current_query_ids)}/{len(successful_query_ids) if apply_success else initial_count} ({len(current_query_ids)/(len(successful_query_ids) if apply_success else initial_count)*100:.1f}%)")
         
-        # フィルタリング済みデータセット作成
+        # Create filtered dataset
         filtered_data = self.create_filtered_dataset(json_data, current_query_ids)
         
-        # 適用されたフィルタ情報を追加
+        # Add applied filter information
         applied_filters = []
         for stage in filtering_stages:
             applied_filters.append({
@@ -818,178 +818,178 @@ class OptimizedMultiTurnFilter:
             })
         filtered_data['filtering_info']['applied_filters'] = applied_filters
         
-        # 詳細レポート生成
+        # Generate detailed report
         detailed_report = self.generate_detailed_report(
             dataset_name, json_data, filtering_stages, filtered_data
         )
         
-        # レポート保存
+        # Save report
         report_filename = f"filtering_report_{dataset_name}.json"
         with open(report_filename, 'w', encoding='utf-8') as f:
             json.dump(detailed_report, f, indent=2, ensure_ascii=False)
         print(f"Detailed report saved to: {report_filename}")
         
         if save_filtered:
-            # フィルタリング済みデータを保存
+            # Save filtered data
             output_filename = f"filtered_multiturn_cir_{dataset_name}.json"
             with open(output_filename, 'w') as f:
                 json.dump(filtered_data, f, indent=2)
             print(f"Filtered dataset saved to: {output_filename}")
         
-        # 簡易統計表示
+        # Display simple statistics
         self.print_simple_statistics(detailed_report)
         
         return filtered_data
 
     def print_simple_statistics(self, report: Dict):
-        """簡易統計を表示"""
+        """Display simple statistics"""
         dataset_name = report['dataset_info']['dataset_name']
         
         print("\n" + "="*80)
-        print("マルチターンCIRフィルタリング詳細レポート")
+        print("Multi-turn CIR Filtering Detailed Report")
         print("="*80)
         
-        # データセット情報
+        # Dataset information
         print(f"\n【{dataset_name}】")
         print("-" * 50)
         baseline = report['dataset_info']['baseline_stats']
         if 'total_queries_in_dataset' in baseline:
-            print(f"データセット総クエリ数: {baseline['total_queries_in_dataset']:,}")
+            print(f"Total queries in dataset: {baseline['total_queries_in_dataset']:,}")
             if 'total_image_pairs' in baseline:
-                print(f"画像ペア数: {baseline['total_image_pairs']:,}")
+                print(f"Image pairs: {baseline['total_image_pairs']:,}")
         
         experiment = report['dataset_info']['experiment_stats']
-        print(f"実験処理クエリ数: {experiment['total_processed_queries']:,}")
+        print(f"Experiment processed queries: {experiment['total_processed_queries']:,}")
         if isinstance(experiment['processing_coverage'], (int, float)):
-            print(f"処理カバー率: {experiment['processing_coverage']:.1f}%")
+            print(f"Processing coverage: {experiment['processing_coverage']:.1f}%")
         
-        # データセットサンプル例を表示
+        # Display dataset sample examples
         if 'displayed_sample_queries' in baseline and baseline['displayed_sample_queries']:
-            print(f"\nデータセットサンプル例:")
-            # 既にランダム選択済みのサンプルを使用
+            print(f"\nDataset sample examples:")
+            # Use already randomly selected samples
             random_samples = baseline['displayed_sample_queries']
             
             for i, sample in enumerate(random_samples, 1):
                 if dataset_name.startswith('fashioniq'):
-                    print(f"  例{i}: {sample.get('candidate', '')} → {sample.get('target', '')}")
-                    print(f"       修正指示: \"{sample.get('caption', '')}\"")
+                    print(f"  Example {i}: {sample.get('candidate', '')} → {sample.get('target', '')}")
+                    print(f"       Modification: \"{sample.get('caption', '')}\"")
                 else:
-                    print(f"  例{i}: {sample}")
+                    print(f"  Example {i}: {sample}")
         
-        # 元データ分析
-        print(f"\n【元データ分析】")
+        # Original data analysis
+        print(f"\n[Original Data Analysis]")
         original = report['original_analysis']
-        print(f"総クエリ数: {original['total_queries']:,}")
-        print(f"成功率: {original['summary']['success_rate']:.1f}%")
+        print(f"Total queries: {original['total_queries']:,}")
+        print(f"Success rate: {original['summary']['success_rate']:.1f}%")
         
-        print("\nターン別成功統計:")
+        print("\nSuccess statistics by turn:")
         for turn_key, stats in original['turn_success_breakdown'].items():
             if turn_key != 'no_success':
                 turn_num = turn_key.replace('turn_', '')
-                print(f"  Turn {turn_num}で成功: {stats['count']:,} ({stats['percentage']:.1f}%)")
+                print(f"  Success at Turn {turn_num}: {stats['count']:,} ({stats['percentage']:.1f}%)")
                 
-                # ダイアログ例を1つ表示
+                # Display one dialog example
                 if stats.get('examples') and len(stats['examples']) > 0:
                     example = stats['examples'][0]
-                    print(f"    === ダイアログ例 (Query {example['query_id']}) ===")
-                    print(f"    参照画像: {example['reference_image']} → 目標画像: {example['target_image']}")
+                    print(f"    === Dialog Example (Query {example['query_id']}) ===")
+                    print(f"    Reference image: {example['reference_image']} → Target image: {example['target_image']}")
                     
-                    # ダイアログの各ターンを表示
+                    # Display each turn of the dialog
                     for dialogue in example.get('dialogue', []):
                         turn_idx = dialogue['turn']
                         user_input = dialogue.get('user_input', '')
                         system_action = dialogue.get('system_action', '')
-                        
+
                         print(f"    Turn {turn_idx}:")
-                        print(f"      ユーザー: \"{user_input}\"")
-                        print(f"      システム: {system_action}")
+                        print(f"      User: \"{user_input}\"")
+                        print(f"      System: {system_action}")
                         
                         if dialogue.get('is_success_turn', False):
-                            print(f"      → 成功！最終ランク: {example.get('final_rank', 'N/A')}")
+                            print(f"      → Success! Final rank: {example.get('final_rank', 'N/A')}")
                             break
                     print()
-        
+
         no_success = original['turn_success_breakdown'].get('no_success', {})
-        print(f"  成功なし: {no_success.get('count', 0):,} ({no_success.get('percentage', 0):.1f}%)")
+        print(f"  No success: {no_success.get('count', 0):,} ({no_success.get('percentage', 0):.1f}%)")
         if no_success.get('examples') and len(no_success.get('examples', [])) > 0:
             example = no_success['examples'][0]
-            print(f"    === 失敗ダイアログ例 (Query {example['query_id']}) ===")
-            print(f"    参照画像: {example['reference_image']} → 目標画像: {example['target_image']}")
+            print(f"    === Failed Dialog Example (Query {example['query_id']}) ===")
+            print(f"    Reference image: {example['reference_image']} → Target image: {example['target_image']}")
             
-            # 全ターンを表示
+            # Display all turns
             for dialogue in example.get('dialogue', []):
                 turn_idx = dialogue['turn']
                 user_input = dialogue.get('user_input', '')
                 system_action = dialogue.get('system_action', '')
-                
+
                 print(f"    Turn {turn_idx}:")
-                print(f"      ユーザー: \"{user_input}\"")
-                print(f"      システム: {system_action}")
-            
-            print(f"    → 最終的に成功せず (最終ランク: {example.get('final_rank', 'N/A')})")
+                print(f"      User: \"{user_input}\"")
+                print(f"      System: {system_action}")
+
+            print(f"    → Did not succeed (Final rank: {example.get('final_rank', 'N/A')})")
             print()
         
-        # フィルタリング分析
-        print(f"\n【段階別フィルタリング】")
+        # Filtering analysis
+        print(f"\n[Stage-by-Stage Filtering]")
         for stage in report['filtering_analysis']['stages']:
             print(f"{stage['stage_name']}:")
-            print(f"  入力: {stage['input_count']:,} → 出力: {stage['output_count']:,}")
-            print(f"  除外: {stage['filtered_count']:,} ({stage['filtering_rate']:.1f}%)")
-            print(f"  保持率: {stage['retention_rate']:.1f}%")
+            print(f"  Input: {stage['input_count']:,} → Output: {stage['output_count']:,}")
+            print(f"  Excluded: {stage['filtered_count']:,} ({stage['filtering_rate']:.1f}%)")
+            print(f"  Retention rate: {stage['retention_rate']:.1f}%")
         
-        # 最終結果
-        print(f"\n【フィルタリング後分析】")
+        # Final results
+        print(f"\n[Post-Filtering Analysis]")
         final = report['final_analysis']
-        print(f"総クエリ数: {final['total_queries']:,}")
-        print(f"成功率: {final['summary']['success_rate']:.1f}%")
+        print(f"Total queries: {final['total_queries']:,}")
+        print(f"Success rate: {final['summary']['success_rate']:.1f}%")
         
-        print("\nターン別成功統計:")
+        print("\nSuccess statistics by turn:")
         for turn_key, stats in final['turn_success_breakdown'].items():
             if turn_key != 'no_success':
                 turn_num = turn_key.replace('turn_', '')
-                print(f"  Turn {turn_num}で成功: {stats['count']:,} ({stats['percentage']:.1f}%)")
+                print(f"  Success at Turn {turn_num}: {stats['count']:,} ({stats['percentage']:.1f}%)")
                 
-                # フィルタリング後のダイアログ例を1つ表示
+                # Display one post-filtering dialog example
                 if stats.get('examples') and len(stats['examples']) > 0:
                     example = stats['examples'][0]
-                    print(f"    === フィルタリング後ダイアログ例 (Query {example['query_id']}) ===")
-                    print(f"    参照画像: {example['reference_image']} → 目標画像: {example['target_image']}")
+                    print(f"    === Post-Filtering Dialog Example (Query {example['query_id']}) ===")
+                    print(f"    Reference image: {example['reference_image']} → Target image: {example['target_image']}")
                     
-                    # 成功までのダイアログを表示
+                    # Display dialog until success
                     for dialogue in example.get('dialogue', []):
                         turn_idx = dialogue['turn']
                         user_input = dialogue.get('user_input', '')
                         system_action = dialogue.get('system_action', '')
-                        
+
                         print(f"    Turn {turn_idx}:")
-                        print(f"      ユーザー: \"{user_input}\"")
-                        print(f"      システム: {system_action}")
+                        print(f"      User: \"{user_input}\"")
+                        print(f"      System: {system_action}")
                         
                         if dialogue.get('is_success_turn', False):
-                            print(f"      → 成功！最終ランク: {example.get('final_rank', 'N/A')}")
+                            print(f"      → Success! Final rank: {example.get('final_rank', 'N/A')}")
                             break
                     print()
-        
+
         no_success = final['turn_success_breakdown'].get('no_success', {})
-        print(f"  成功なし: {no_success.get('count', 0):,} ({no_success.get('percentage', 0):.1f}%)")
+        print(f"  No success: {no_success.get('count', 0):,} ({no_success.get('percentage', 0):.1f}%)")
         
-        # 品質改善
-        print(f"\n【品質改善】")
+        # Quality improvement
+        print(f"\n[Quality Improvement]")
         comparison = report['comparison']['quality_improvement']
-        print(f"元の成功率: {comparison['original_success_rate']:.1f}%")
-        print(f"最終成功率: {comparison['final_success_rate']:.1f}%")
-        print(f"成功率向上: {comparison['final_success_rate'] - comparison['original_success_rate']:+.1f}%")
+        print(f"Original success rate: {comparison['original_success_rate']:.1f}%")
+        print(f"Final success rate: {comparison['final_success_rate']:.1f}%")
+        print(f"Success rate improvement: {comparison['final_success_rate'] - comparison['original_success_rate']:+.1f}%")
         
-        # 全体サマリー
+        # Overall summary
         overall = report['filtering_analysis']['overall_summary']
-        print(f"\n【全体サマリー】")
-        print(f"全体フィルタリング率: {overall['overall_filtering_rate']:.1f}%")
-        print(f"全体保持率: {overall['overall_retention_rate']:.1f}%")
+        print(f"\n[Overall Summary]")
+        print(f"Overall filtering rate: {overall['overall_filtering_rate']:.1f}%")
+        print(f"Overall retention rate: {overall['overall_retention_rate']:.1f}%")
 
     def analyze_turn_success(self, json_data: Dict, query_ids: List[int]) -> Dict:
-        """ターン別の成功統計を分析"""
-        
-        # JSONの結果を辞書に変換
+        """Analyze success statistics by turn"""
+
+        # Convert JSON results to dictionary
         results_dict = {}
         for result in json_data['results']:
             try:
@@ -999,7 +999,7 @@ class OptimizedMultiTurnFilter:
                 continue
         
         turn_success_stats = {}
-        turn_candidates = {}  # ランダム選択用の候補を格納
+        turn_candidates = {}  # Store candidates for random selection
         no_success_candidates = []
         
         for query_id in query_ids:
@@ -1008,9 +1008,9 @@ class OptimizedMultiTurnFilter:
             
             result = results_dict[query_id]
             
-            # 結果レベルのsuccessフィールドを確認
+            # Check success field at result level
             if result.get('success', False):
-                # 成功したターンを特定
+                # Identify successful turn
                 success_turn = result.get('success_turn', 0)
                 turn_key = f"turn_{success_turn}"
                 
@@ -1020,7 +1020,7 @@ class OptimizedMultiTurnFilter:
                 
                 turn_success_stats[turn_key].append(query_id)
                 
-                # 詳細なダイアログ例を作成
+                # Create detailed dialog example
                 dialogue_example = {
                     'query_id': query_id,
                     'reference_image': result.get('reference_image_id', ''),
@@ -1030,7 +1030,7 @@ class OptimizedMultiTurnFilter:
                     'dialogue': []
                 }
                 
-                # ターン別のダイアログを構築
+                # Build dialog by turn
                 turns = result.get('turns', [])
                 for i, turn_data in enumerate(turns):
                     turn_info = {
@@ -1042,24 +1042,24 @@ class OptimizedMultiTurnFilter:
                         'is_success_turn': (i == success_turn)
                     }
                     
-                    # ユーザーとシステムの対話形式で表現
+                    # Express as user-system dialog format
                     if i == 0:
                         turn_info['user_input'] = result.get('original_query', '')
-                        turn_info['system_action'] = f"画像検索実行 → ランク{turn_data.get('best_gt_rank', 'N/A')}"
+                        turn_info['system_action'] = f"Image search executed → Rank {turn_data.get('best_gt_rank', 'N/A')}"
                     else:
                         turn_info['user_input'] = turn_data.get('relative_caption', '')
-                        turn_info['system_action'] = f"修正検索実行 → ランク{turn_data.get('best_gt_rank', 'N/A')}"
-                    
+                        turn_info['system_action'] = f"Modified search executed → Rank {turn_data.get('best_gt_rank', 'N/A')}"
+
                     dialogue_example['dialogue'].append(turn_info)
                 
-                # 最終結果情報
+                # Final result information
                 final_turn = turns[success_turn] if success_turn < len(turns) else {}
                 dialogue_example['final_rank'] = final_turn.get('best_gt_rank', 'N/A')
                 dialogue_example['final_query'] = final_turn.get('query_text', '')
                 
                 turn_candidates[turn_key].append(dialogue_example)
             else:
-                # 成功しなかったクエリ
+                # Queries that did not succeed
                 no_success_example = {
                     'query_id': query_id,
                     'reference_image': result.get('reference_image_id', ''),
@@ -1069,7 +1069,7 @@ class OptimizedMultiTurnFilter:
                     'dialogue': []
                 }
                 
-                # 全ターンのダイアログを記録
+                # Record dialog for all turns
                 turns = result.get('turns', [])
                 max_turn = len(turns) - 1
                 for i, turn_data in enumerate(turns):
@@ -1084,14 +1084,14 @@ class OptimizedMultiTurnFilter:
                     
                     if i == 0:
                         turn_info['user_input'] = result.get('original_query', '')
-                        turn_info['system_action'] = f"画像検索実行 → ランク{turn_data.get('best_gt_rank', 'N/A')}"
+                        turn_info['system_action'] = f"Image search executed → Rank {turn_data.get('best_gt_rank', 'N/A')}"
                     else:
                         turn_info['user_input'] = turn_data.get('relative_caption', '')
-                        turn_info['system_action'] = f"修正検索実行 → ランク{turn_data.get('best_gt_rank', 'N/A')}"
-                    
+                        turn_info['system_action'] = f"Modified search executed → Rank {turn_data.get('best_gt_rank', 'N/A')}"
+
                     no_success_example['dialogue'].append(turn_info)
-                
-                # 最終ランク情報
+
+                # Final rank information
                 if turns:
                     final_turn = turns[-1]
                     no_success_example['final_rank'] = final_turn.get('best_gt_rank', 'N/A')
@@ -1099,10 +1099,10 @@ class OptimizedMultiTurnFilter:
                 
                 no_success_candidates.append(no_success_example)
         
-        # 統計をまとめる（ランダムに3つ選択）
+        # Summarize statistics (randomly select 3)
         turn_stats = {}
         for turn_key in sorted(turn_success_stats.keys()):
-            # ランダムに3つの例を選択
+            # Randomly select 3 examples
             candidates = turn_candidates[turn_key]
             random_examples = random.sample(candidates, min(3, len(candidates))) if candidates else []
             
@@ -1112,7 +1112,7 @@ class OptimizedMultiTurnFilter:
                 'examples': random_examples
             }
         
-        # 成功しなかったクエリの例もランダムに3つ選択
+        # Also randomly select 3 examples of queries that did not succeed
         random_no_success = random.sample(no_success_candidates, min(3, len(no_success_candidates))) if no_success_candidates else []
         
         turn_stats['no_success'] = {
@@ -1124,10 +1124,10 @@ class OptimizedMultiTurnFilter:
         return turn_stats
 
     def get_dataset_baseline_stats(self, dataset_name: str) -> Dict:
-        """データセットの基本統計を取得"""
+        """Get basic statistics of the dataset"""
         stats = {}
         
-        # 実際に処理されたデータを確認
+        # Check actually processed data
         json_file = f"multiturn_cir_results_{dataset_name}.json"
         if os.path.exists(json_file):
             with open(json_file, 'r') as f:
@@ -1135,12 +1135,12 @@ class OptimizedMultiTurnFilter:
                 actual_processed = len(json_data.get('results', []))
                 stats['actual_processed_queries'] = actual_processed
                 
-                # data_completenessから推定可能クエリ数を取得
+                # Get estimated processable queries from data_completeness
                 completeness = json_data.get('data_completeness', {})
                 estimated_processable = completeness.get('estimated_processable_queries', actual_processed)
                 stats['estimated_processable_queries'] = estimated_processable
         
-        # データセット別の統計
+        # Dataset-specific statistics
         if dataset_name.startswith('fashioniq'):
             category = dataset_name.split('_')[1]  # dress, shirt, toptee
             split = 'val' if 'val' in dataset_name else 'train'
@@ -1150,7 +1150,7 @@ class OptimizedMultiTurnFilter:
                 with open(annotation_file, 'r') as f:
                     data = json.load(f)
                     
-                    # Fashion-IQはrelative_captionsの配列形式
+                    # Fashion-IQ uses relative_captions array format
                     total_triplets = 0
                     for item in data:
                         total_triplets += len(item.get('captions', []))
@@ -1166,18 +1166,18 @@ class OptimizedMultiTurnFilter:
                 with open(annotation_file, 'r') as f:
                     data = json.load(f)
                     
-                    # CIRRの場合、元のアノテーションファイルの総数を保持
+                    # For CIRR, preserve total count from original annotation file
                     stats['total_queries_in_dataset'] = len(data)
                     stats['annotation_file'] = annotation_file
                     
-                    # サンプル例は実際に処理されたデータからランダム選択
+                    # Sample examples are randomly selected from actually processed data
                     if 'actual_processed_queries' in stats and stats['actual_processed_queries'] > 0:
                         if os.path.exists(json_file):
                             with open(json_file, 'r') as f:
                                 json_data = json.load(f)
                                 results = json_data.get('results', [])
                                 if results:
-                                    # 実際の結果からランダムサンプルを選択
+                                    # Select random sample from actual results
                                     import random
                                     sample_size = min(5, len(results))
                                     stats['sample_queries'] = random.sample(results, sample_size)
@@ -1194,27 +1194,27 @@ class OptimizedMultiTurnFilter:
                     stats['total_queries_in_dataset'] = len(data)
                     stats['annotation_file'] = annotation_file
                     
-                    # 全てのサンプル例を保存
+                    # Save all sample examples
                     stats['sample_queries'] = data
         
         return stats
 
     def generate_detailed_report(self, dataset_name: str, original_data: Dict, 
                                filtering_stages: List[Dict], final_data: Dict) -> Dict:
-        """詳細な分析レポートを生成"""
-        
-        # 基本統計を取得
+        """Generate detailed analysis report"""
+
+        # Get basic statistics
         baseline_stats = self.get_dataset_baseline_stats(dataset_name)
         
-        # サンプル例をランダム選択（print表示と同じロジック）
+        # Randomly select sample examples (same logic as print display)
         if 'sample_queries' in baseline_stats and baseline_stats['sample_queries']:
             sample_queries = baseline_stats['sample_queries']
             random_samples = random.sample(sample_queries, min(2, len(sample_queries))) if sample_queries else []
             baseline_stats['displayed_sample_queries'] = random_samples
-            # 全てのサンプルは削除してファイルサイズを抑制
+            # Delete all samples to reduce file size
             del baseline_stats['sample_queries']
         
-        # 元データの統計
+        # Original data statistics
         all_query_ids = []
         for result in original_data['results']:
             try:
@@ -1225,7 +1225,7 @@ class OptimizedMultiTurnFilter:
         
         original_turn_stats = self.analyze_turn_success(original_data, all_query_ids)
         
-        # フィルタリング後の統計  
+        # Post-filtering statistics
         final_query_ids = []
         for result in final_data['results']:
             try:
@@ -1236,7 +1236,7 @@ class OptimizedMultiTurnFilter:
         
         final_turn_stats = self.analyze_turn_success(original_data, final_query_ids)
         
-        # 段階別フィルタリング統計
+        # Stage-by-stage filtering statistics
         stage_stats = []
         for stage in filtering_stages:
             stage_info = {
@@ -1248,20 +1248,20 @@ class OptimizedMultiTurnFilter:
                 'retention_rate': stage['output_count'] / stage['input_count'] * 100 if stage['input_count'] > 0 else 0
             }
             
-            # 具体例があれば追加
+            # Add specific examples if available
             if 'examples' in stage:
                 stage_info['examples'] = stage['examples']
                 
             stage_stats.append(stage_info)
         
-        # 実際に処理されたクエリ数を使用
+        # Use actually processed query count
         actual_processed = baseline_stats.get('actual_processed_queries', len(all_query_ids))
         
-        # 処理カバー率を元のデータセット総クエリ数から計算
+        # Calculate processing coverage from original dataset total query count
         total_queries_in_dataset = baseline_stats.get('total_queries_in_dataset', actual_processed)
         processing_coverage = len(original_data['results']) / total_queries_in_dataset * 100 if total_queries_in_dataset > 0 else 100.0
         
-        # 詳細レポート作成
+        # Create detailed report
         report = {
             'dataset_info': {
                 'dataset_name': dataset_name,
@@ -1337,17 +1337,17 @@ def main():
     
     args = parser.parse_args()
     
-    # ランダムシードを設定
+    # Set random seed
     random.seed(args.random_seed)
     np.random.seed(args.random_seed)
     
-    # フィルタ初期化
+    # Initialize filter
     filter_system = OptimizedMultiTurnFilter(
         similarity_threshold=args.similarity_threshold,
         rank_margin=args.rank_margin
     )
     
-    # 各データセットをフィルタリング
+    # Filter each dataset
     results = []
     for dataset_name in args.datasets:
         try:

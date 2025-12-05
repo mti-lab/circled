@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 MTCIR Caption Generation System with OpenAI GPT-4o
-OpenAI GPT-4oを使用してFashionIQ、CIRCO、CIRRの画像にキャプションを非同期で生成
+Asynchronously generate captions for FashionIQ, CIRCO, and CIRR images using OpenAI GPT-4o
 """
 
 import json
@@ -22,20 +22,20 @@ from dotenv import load_dotenv
 import logging
 import tiktoken
 
-# .envファイルから環境変数を読み込み
+# Load environment variables from .env file
 load_dotenv()
 
 class OpenAIGPT4oCaptionGenerator:
-    """OpenAI GPT-4oを使用したキャプション生成クラス"""
-    
+    """Caption generation class using OpenAI GPT-4o"""
+
     def __init__(self, api_key: Optional[str] = None, max_concurrent: int = 100, requests_per_minute: int = 1500):
         """
-        初期化
-        
+        Initialize the caption generator.
+
         Args:
-            api_key: OpenAI API Key（Noneの場合は環境変数から取得）
-            max_concurrent: 同時実行可能なリクエスト数（デフォルト100に大幅増加）
-            requests_per_minute: 1分間あたりの最大リクエスト数（デフォルト1500に大幅増加）
+            api_key: OpenAI API Key (if None, retrieved from environment variable)
+            max_concurrent: Maximum concurrent requests (default: 100)
+            requests_per_minute: Maximum requests per minute (default: 1500)
         """
         self.api_key = api_key or os.getenv('OPEN_API_KEY')
         if not self.api_key:
@@ -44,44 +44,44 @@ class OpenAIGPT4oCaptionGenerator:
         self.max_concurrent = max_concurrent
         self.requests_per_minute = requests_per_minute
         
-        # レート制限用のスロットル（より保守的な設定）
+        # Throttler for rate limiting
         self.throttler = Throttler(rate_limit=requests_per_minute, period=60)
-        
-        # 同時実行制限用のセマフォ
+
+        # Semaphore for concurrent request limiting
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        
-        # OpenAI API設定
+
+        # OpenAI API configuration
         self.api_url = "https://api.openai.com/v1/chat/completions"
         self.headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
         
-        # ログ設定
+        # Logging configuration
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
-        
-        # リトライ設定
+
+        # Retry configuration
         self.max_retries = 3
-        self.retry_delay = 2  # 秒
-        
-        # トークン数計測用エンコーダー
+        self.retry_delay = 2  # seconds
+
+        # Token counting encoder
         try:
             self.encoding = tiktoken.encoding_for_model("gpt-4o-mini")
         except:
             self.encoding = tiktoken.get_encoding("cl100k_base")
         
-        # コスト計算用（2024年価格）
+        # Cost calculation (2024 pricing)
         self.cost_per_input_token = 0.00015 / 1000  # $0.15 per 1M input tokens
         self.cost_per_output_token = 0.0006 / 1000  # $0.60 per 1M output tokens
-        
-        # 統計情報
+
+        # Statistics
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost = 0.0
         
     def load_dataset_configs(self):
-        """データセット設定を読み込み"""
+        """Load dataset configurations"""
         configs = {
             'fashion-iq': {
                 'data_dir': 'fashion-iq/images',
@@ -126,7 +126,7 @@ class OpenAIGPT4oCaptionGenerator:
         return configs
 
     def collect_dataset_images(self, dataset_name: str, configs: Dict, splits: List[str] = ['train', 'val', 'test']):
-        """指定されたデータセットから画像パスを収集"""
+        """Collect image paths from the specified dataset"""
         if dataset_name not in configs:
             raise ValueError(f"Unknown dataset: {dataset_name}")
         
@@ -134,13 +134,13 @@ class OpenAIGPT4oCaptionGenerator:
         image_paths = []
         image_info = {}
         
-        # 統計情報
+        # Statistics
         total_ids = 0
         found_images = 0
         missing_images = 0
-        
+
         if dataset_name == 'fashion-iq':
-            # FashionIQの処理
+            # Process FashionIQ
             data_dir = config['data_dir']
             
             for split in splits:
@@ -148,7 +148,7 @@ class OpenAIGPT4oCaptionGenerator:
                     continue
                 
                 for category in config['categories']:
-                    # カテゴリに対応するsplit_fileを見つける
+                    # Find the split file for this category
                     category_split_file = None
                     for split_file in config['split_files'][split]:
                         if f'.{category}.' in split_file:
@@ -173,16 +173,16 @@ class OpenAIGPT4oCaptionGenerator:
                     
                     for image_id in image_ids:
                         total_ids += 1
-                        # FashionIQは拡張子なしIDで、カテゴリ別サブディレクトリ
+                        # FashionIQ uses IDs without extension, organized by category subdirectory
                         image_filename = f"{image_id}.jpg"
                         image_path = os.path.join(data_dir, category, image_filename)
-                        
+
                         if os.path.exists(image_path):
-                            # 重複チェック用のハッシュ
+                            # Hash for duplicate checking
                             img_hash = self._get_image_hash(image_path)
-                            
+
                             if img_hash not in image_info:
-                                # 新しい画像として追加
+                                # Add as new image
                                 image_paths.append(image_path)
                                 image_info[img_hash] = {
                                     'dataset': dataset_name,
@@ -195,7 +195,7 @@ class OpenAIGPT4oCaptionGenerator:
                                 found_images += 1
                                 category_found += 1
                             else:
-                                # 重複画像が見つかった場合、パスを記録
+                                # Record path if duplicate image found
                                 image_info[img_hash]['duplicate_paths'].append(image_path)
                                 found_images += 1
                                 category_found += 1
@@ -206,7 +206,7 @@ class OpenAIGPT4oCaptionGenerator:
                     print(f"  {category}/{split}: {category_found}/{category_total} images found ({category_missing} missing)")
         
         elif dataset_name == 'cirr':
-            # CIRRの処理
+            # Process CIRR
             data_dir = config['data_dir']
             
             for split in splits:
@@ -226,22 +226,22 @@ class OpenAIGPT4oCaptionGenerator:
                 split_total = 0
                 split_found = 0
                 
-                # CIRRのsplitファイルはdict形式（image_id: path）
+                # CIRR split file is dict format (image_id: path)
                 for image_id, image_path in split_data.items():
                     total_ids += 1
                     split_total += 1
-                    # パスが相対パス（./train/34/...）の場合、data_dirと結合
+                    # If path is relative (./train/34/...), combine with data_dir
                     if image_path.startswith('./'):
-                        full_path = os.path.join(data_dir, image_path[2:])  # "./"を除去
+                        full_path = os.path.join(data_dir, image_path[2:])  # Remove "./"
                     else:
                         full_path = os.path.join(data_dir, image_path)
                     
                     if os.path.exists(full_path):
-                        # 重複チェック用のハッシュ
+                        # Hash for duplicate checking
                         img_hash = self._get_image_hash(full_path)
-                        
+
                         if img_hash not in image_info:
-                            # 新しい画像として追加
+                            # Add as new image
                             image_paths.append(full_path)
                             image_info[img_hash] = {
                                 'dataset': dataset_name,
@@ -254,7 +254,7 @@ class OpenAIGPT4oCaptionGenerator:
                             found_images += 1
                             split_found += 1
                         else:
-                            # 重複画像が見つかった場合、パスを記録
+                            # Record path if duplicate image found
                             image_info[img_hash]['duplicate_paths'].append(full_path)
                             found_images += 1
                             split_found += 1
@@ -264,7 +264,7 @@ class OpenAIGPT4oCaptionGenerator:
                 print(f"  Found {split_found}/{split_total} images")
         
         elif dataset_name == 'circo':
-            # CIRCOの処理
+            # Process CIRCO
             data_dir = config['data_dir']
             print(f"Processing CIRCO: scanning all images in {data_dir}")
             
@@ -308,15 +308,15 @@ class OpenAIGPT4oCaptionGenerator:
         return image_paths, image_info
 
     def calculate_tokens(self, text: str) -> int:
-        """テキストのトークン数を計算"""
+        """Calculate token count for text"""
         return len(self.encoding.encode(text))
-    
+
     def estimate_image_tokens(self) -> int:
-        """画像のトークン数を推定（detail="low"の場合85トークン）"""
-        return 85  # OpenAI の公式ドキュメントによる
-    
+        """Estimate token count for image (85 tokens for detail='low')"""
+        return 85  # Per OpenAI official documentation
+
     def update_costs(self, input_tokens: int, output_tokens: int):
-        """コスト統計を更新"""
+        """Update cost statistics"""
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
         input_cost = input_tokens * self.cost_per_input_token
@@ -324,7 +324,7 @@ class OpenAIGPT4oCaptionGenerator:
         self.total_cost += input_cost + output_cost
     
     def get_cost_summary(self) -> Dict[str, Any]:
-        """コスト統計のサマリーを取得"""
+        """Get cost statistics summary"""
         processed_count = getattr(self, '_processed_count', 1)
         return {
             'total_input_tokens': self.total_input_tokens,
@@ -337,7 +337,7 @@ class OpenAIGPT4oCaptionGenerator:
         }
 
     def _get_image_hash(self, image_path: str) -> str:
-        """画像ファイルのハッシュを計算"""
+        """Calculate hash of image file"""
         hasher = hashlib.md5()
         with open(image_path, 'rb') as f:
             for chunk in iter(lambda: f.read(4096), b""):
@@ -345,7 +345,7 @@ class OpenAIGPT4oCaptionGenerator:
         return hasher.hexdigest()
 
     def get_category_from_path(self, image_path: str) -> str:
-        """画像パスからカテゴリを推定"""
+        """Infer category from image path"""
         path_parts = Path(image_path).parts
         
         if 'dress' in path_parts:
@@ -362,7 +362,7 @@ class OpenAIGPT4oCaptionGenerator:
             return 'unknown'
 
     def generate_category_prompt(self, category: str) -> str:
-        """カテゴリに応じたプロンプトを生成"""
+        """Generate prompt based on category"""
         prompts = {
             'dress': "Describe this dress in 1-2 sentences. Focus on color, style, length, and key design features.",
             'shirt': "Describe this shirt in 1-2 sentences. Focus on color, style, collar, sleeves, and key design features.",
@@ -374,11 +374,11 @@ class OpenAIGPT4oCaptionGenerator:
         return prompts.get(category, prompts['unknown'])
 
     def encode_image_base64(self, image_path: str) -> str:
-        """画像をBase64エンコード"""
+        """Encode image to Base64"""
         try:
-            # 画像を開いてリサイズ（API制限対応）
+            # Open and resize image (for API limits)
             with Image.open(image_path) as image:
-                # RGBに変換（透明度がある場合の対応）
+                # Convert to RGB (handle transparency)
                 if image.mode in ('RGBA', 'LA'):
                     background = Image.new('RGB', image.size, (255, 255, 255))
                     background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
@@ -386,15 +386,15 @@ class OpenAIGPT4oCaptionGenerator:
                 elif image.mode != 'RGB':
                     image = image.convert('RGB')
                 
-                # サイズ制限（OpenAI API制限対応）
-                max_size = (512, 512)  # より小さいサイズに制限してコスト削減
+                # Size limit (for OpenAI API limits)
+                max_size = (512, 512)  # Smaller size to reduce cost
                 if image.size[0] > max_size[0] or image.size[1] > max_size[1]:
                     image.thumbnail(max_size, Image.Resampling.LANCZOS)
-                
-                # 一時的にJPEGとして保存してBase64エンコード
+
+                # Save as JPEG temporarily and encode to Base64
                 import io
                 buffer = io.BytesIO()
-                image.save(buffer, format="JPEG", quality=75)  # 品質を下げてサイズ削減
+                image.save(buffer, format="JPEG", quality=75)  # Lower quality to reduce size
                 image_data = buffer.getvalue()
                 return base64.b64encode(image_data).decode('utf-8')
         except Exception as e:
@@ -402,16 +402,16 @@ class OpenAIGPT4oCaptionGenerator:
             raise
 
     async def generate_caption_single_with_retry(self, session: aiohttp.ClientSession, image_path: str, category: str, image_index: int) -> Dict[str, Any]:
-        """リトライ機能付きで単一画像のキャプションを生成"""
+        """Generate caption for single image with retry functionality"""
         for attempt in range(self.max_retries):
             try:
                 result = await self.generate_caption_single(session, image_path, category, image_index)
                 if result['success']:
                     return result
-                    
-                # レート制限エラーの場合は待機時間を増やす
+
+                # Increase wait time for rate limit errors
                 if 'rate limit' in result.get('error', '').lower():
-                    wait_time = self.retry_delay * (2 ** attempt)  # 指数バックオフ
+                    wait_time = self.retry_delay * (2 ** attempt)  # Exponential backoff
                     self.logger.warning(f"Rate limit hit for {image_path}, waiting {wait_time}s before retry {attempt+1}/{self.max_retries}")
                     await asyncio.sleep(wait_time)
                 else:
@@ -432,19 +432,19 @@ class OpenAIGPT4oCaptionGenerator:
         }
 
     async def generate_caption_single(self, session: aiohttp.ClientSession, image_path: str, category: str, image_index: int) -> Dict[str, Any]:
-        """単一画像のキャプションを非同期で生成"""
-        async with self.semaphore:  # 同時実行制限
-            async with self.throttler:  # レート制限
+        """Asynchronously generate caption for single image"""
+        async with self.semaphore:  # Concurrent request limit
+            async with self.throttler:  # Rate limit
                 try:
-                    # 画像をBase64エンコード
+                    # Encode image to Base64
                     image_base64 = self.encode_image_base64(image_path)
-                    
-                    # プロンプト生成
+
+                    # Generate prompt
                     prompt = self.generate_category_prompt(category)
-                    
-                    # OpenAI API用のペイロード
+
+                    # Payload for OpenAI API
                     payload = {
-                        "model": "gpt-4o-mini",  # より安価なモデルを使用
+                        "model": "gpt-4o-mini",  # Using more affordable model
                         "messages": [
                             {
                                 "role": "user",
@@ -463,17 +463,17 @@ class OpenAIGPT4oCaptionGenerator:
                                 ]
                             }
                         ],
-                        "max_tokens": 100,  # さらに短いキャプション用にトークン数を削減
+                        "max_tokens": 100,  # Reduced tokens for shorter captions
                         "temperature": 0.1
                     }
-                    
-                    # API呼び出し
+
+                    # API call
                     async with session.post(self.api_url, headers=self.headers, json=payload) as response:
                         if response.status == 200:
                             result = await response.json()
                             caption = result['choices'][0]['message']['content'].strip()
-                            
-                            # トークン数を計算・記録
+
+                            # Calculate and record token counts
                             prompt_tokens = self.calculate_tokens(prompt) + self.estimate_image_tokens()
                             output_tokens = self.calculate_tokens(caption)
                             self.update_costs(prompt_tokens, output_tokens)
@@ -515,7 +515,7 @@ class OpenAIGPT4oCaptionGenerator:
                     }
 
     async def generate_captions_for_dataset(self, dataset_name: str, splits: List[str] = ['train', 'val', 'test'], output_file: str = None) -> Dict[str, Any]:
-        """データセット全体のキャプションを非同期で生成（逐次保存対応・途中再生機能付き）"""
+        """Asynchronously generate captions for entire dataset (with incremental save and resume support)"""
         print(f"Starting caption generation for dataset: {dataset_name}")
         
         configs = self.load_dataset_configs()
@@ -528,7 +528,7 @@ class OpenAIGPT4oCaptionGenerator:
             output_file = f"captions_gpt4omini_{dataset_name}.json"
         temp_output_file = output_file + ".tmp"
         
-        # 既存のキャプションファイルを読み込み（途中再生機能）
+        # Load existing caption file (resume functionality)
         existing_captions = {}
         if os.path.exists(output_file):
             try:
@@ -537,8 +537,8 @@ class OpenAIGPT4oCaptionGenerator:
                 print(f"Found existing caption file with {len(existing_captions)} entries")
             except Exception as e:
                 print(f"Warning: Could not load existing caption file: {e}")
-        
-        # 一時ファイルからも読み込み（より新しい場合）
+
+        # Also load from temp file (if more recent)
         if os.path.exists(temp_output_file):
             try:
                 with open(temp_output_file, 'r', encoding='utf-8') as f:
@@ -548,17 +548,17 @@ class OpenAIGPT4oCaptionGenerator:
                     print(f"Loaded more recent data from temp file: {len(temp_captions)} entries")
             except Exception as e:
                 print(f"Warning: Could not load temp caption file: {e}")
-        
-        # 既存のキャプションから、ユニークな画像パスに対応するもののみを抽出
-        # （重複画像のキャプションは除外して、オリジナル画像のキャプションのみを考慮）
+
+        # Extract only captions for unique image paths from existing captions
+        # (Exclude duplicate image captions, consider only original image captions)
         existing_unique_captions = {}
         for path in image_paths:
             if path in existing_captions:
                 existing_unique_captions[path] = existing_captions[path]
-        
+
         print(f"Existing captions for unique images: {len(existing_unique_captions)}")
-        
-        # 未処理の画像パスのみを抽出
+
+        # Extract only unprocessed image paths
         remaining_image_paths = [path for path in image_paths if path not in existing_unique_captions]
         already_processed = len(image_paths) - len(remaining_image_paths)
         
@@ -567,9 +567,9 @@ class OpenAIGPT4oCaptionGenerator:
         print(f"Already processed: {already_processed}")
         print(f"Remaining to process: {len(remaining_image_paths)}")
         
-        # デバッグ情報：重複画像の状況を確認
+        # Debug info: Check duplicate image status
         if len(existing_unique_captions) > 0:
-            # existing_unique_captionsのキーがimage_pathsに含まれているかチェック
+            # Check if existing_unique_captions keys are in image_paths
             existing_in_unique = sum(1 for path in existing_unique_captions.keys() if path in image_paths)
             print(f"Debug: Existing captions in unique paths: {existing_in_unique}")
             print(f"Debug: Existing captions not in unique paths: {len(existing_unique_captions) - existing_in_unique}")
@@ -581,7 +581,7 @@ class OpenAIGPT4oCaptionGenerator:
         print(f"Generating captions for {len(remaining_image_paths)} remaining images...")
         print(f"Rate limit: {self.requests_per_minute} requests/minute, Concurrent: {self.max_concurrent}")
         
-        # 既存のキャプションから開始
+        # Start from existing captions
         captions_dict = existing_unique_captions.copy()
         successful = 0
         failed = 0
@@ -604,11 +604,11 @@ class OpenAIGPT4oCaptionGenerator:
                         successful += 1
                     else:
                         failed += 1
-                    # 100件ごとに一時ファイルへ保存
+                    # Save to temp file every 100 items
                     if (idx + 1) % save_every == 0:
                         self.save_captions(captions_dict, temp_output_file)
-                        print(f"[逐次保存] {already_processed + idx + 1}件まで保存しました")
-            # 最終的に本ファイルへ保存
+                        print(f"[Incremental save] Saved up to {already_processed + idx + 1} items")
+            # Save to final file
             self.save_captions(captions_dict, output_file)
             if os.path.exists(temp_output_file):
                 os.remove(temp_output_file)
@@ -620,15 +620,15 @@ class OpenAIGPT4oCaptionGenerator:
         print(f"  Total processed: {already_processed + successful}")
         print(f"  Success rate (new): {successful/(successful+failed)*100:.2f}%" if (successful+failed) > 0 else "  No new processing needed")
         
-        # 全データセットで重複画像にキャプションをコピー
+        # Copy captions to duplicate images across all datasets
         duplicate_count = 0
         for img_hash, info in image_info.items():
             if 'duplicate_paths' in info and info['duplicate_paths']:
-                # オリジナル画像のキャプションを取得
+                # Get caption from original image
                 original_path = info['image_path']
                 if original_path in captions_dict:
                     original_caption = captions_dict[original_path]
-                    # 重複画像パスにキャプションをコピー
+                    # Copy caption to duplicate image paths
                     for dup_path in info['duplicate_paths']:
                         captions_dict[dup_path] = original_caption
                         duplicate_count += 1
@@ -637,7 +637,7 @@ class OpenAIGPT4oCaptionGenerator:
             print(f"Copied captions to {duplicate_count} duplicate images")
             print(f"Total captions after duplication: {len(captions_dict)}")
         
-        # コスト統計を表示（新規処理分のみ）
+        # Display cost statistics (new processing only)
         if successful + failed > 0:
             self._processed_count = successful + failed
             cost_summary = self.get_cost_summary()
@@ -650,7 +650,7 @@ class OpenAIGPT4oCaptionGenerator:
             print(f"  Total cost: ${cost_summary['total_cost']:.4f}")
             print(f"  Cost per image: ${cost_summary['cost_per_image']:.4f}")
             
-            # 残りの画像の予想コストを計算
+            # Calculate estimated cost for remaining images
             if len(remaining_image_paths) > 0:
                 estimated_remaining_cost = cost_summary['cost_per_image'] * len(remaining_image_paths)
                 print(f"  Estimated cost for remaining images ({len(remaining_image_paths)} images): ${estimated_remaining_cost:.2f}")
@@ -658,7 +658,7 @@ class OpenAIGPT4oCaptionGenerator:
         return captions_dict
 
     def save_captions(self, captions_dict: Dict[str, Any], output_file: str):
-        """キャプションをJSONファイルに保存"""
+        """Save captions to JSON file"""
         output_dir = os.path.dirname(output_file)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
@@ -669,7 +669,7 @@ class OpenAIGPT4oCaptionGenerator:
         print(f"Captions saved to: {output_file}")
 
 async def main():
-    """メイン関数"""
+    """Main function"""
     parser = argparse.ArgumentParser(description='Generate captions using OpenAI GPT-4o')
     parser.add_argument('--dataset', required=True, choices=['fashion-iq', 'cirr', 'circo'], 
                        help='Dataset to process')
@@ -688,18 +688,18 @@ async def main():
     
     args = parser.parse_args()
     
-    # 出力ファイル名を設定
+    # Set output file name
     if not args.output:
         args.output = f'captions_gpt4omini_{args.dataset}.json'
     
     try:
-        # キャプション生成器を初期化
+        # Initialize caption generator
         generator = OpenAIGPT4oCaptionGenerator(
             max_concurrent=args.max_concurrent,
             requests_per_minute=args.requests_per_minute
         )
         
-        # 進捗確認のみの場合
+        # Progress check only mode
         if args.check_progress:
             configs = generator.load_dataset_configs()
             image_paths, _ = generator.collect_dataset_images(args.dataset, configs, args.splits)
@@ -718,7 +718,7 @@ async def main():
             print(f"Progress: {len(existing_captions)/len(image_paths)*100:.1f}%")
             return 0
         
-        # 強制再開の場合、既存ファイルを削除
+        # If force restart, delete existing files
         if args.force_restart:
             if os.path.exists(args.output):
                 os.remove(args.output)
@@ -728,10 +728,10 @@ async def main():
                 os.remove(temp_file)
                 print(f"Removed existing temp file: {temp_file}")
         
-        # キャプション生成
+        # Generate captions
         captions_dict = await generator.generate_captions_for_dataset(args.dataset, args.splits, args.output)
         
-        # 結果を保存
+        # Save results
         if captions_dict:
             generator.save_captions(captions_dict, args.output)
         else:
