@@ -56,3 +56,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Test data and output (not for distribution)
+test_data/
+test_env/
+output/

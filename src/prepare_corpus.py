@@ -1,6 +1,5 @@
 import json
 import os
-import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoProcessor, BlipForImageTextRetrieval
@@ -8,9 +7,6 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 import hashlib
-from pathlib import Path
-import pickle
-from collections import defaultdict
 import argparse
 import clip
 
@@ -36,9 +32,16 @@ class MultiDatasetImageProcessor:
             raise ValueError(f"Unsupported model: {model_name}. Use 'blip' or 'clip'")
 
     def load_dataset_configs(self):
-        """Load dataset configuration"""
+        """Load dataset configuration
+
+        Dataset structures:
+        - FashionIQ: images/{category}/{image_id}.jpg, split files are lists of IDs
+        - CIRR: img_raw/{split}/{image_id}.png, split files are dict {id: relative_path}
+        - CIRCO: unlabeled2017/{id}.jpg, scan all images
+        """
         configs = {
             'fashion-iq': {
+                'type': 'fashioniq',
                 'data_dir': 'fashion-iq/images',
                 'split_files': {
                     'train': [
@@ -60,7 +63,8 @@ class MultiDatasetImageProcessor:
                 'categories': ['dress', 'shirt', 'toptee']
             },
             'cirr': {
-                'data_dir': 'cirr/img_raw/images',
+                'type': 'cirr',
+                'data_dir': 'cirr/img_raw',  # Base directory for relative paths
                 'split_files': {
                     'train': ['cirr/image_splits/split.rc2.train.json'],
                     'val': ['cirr/image_splits/split.rc2.val.json'],
@@ -69,10 +73,11 @@ class MultiDatasetImageProcessor:
                 'categories': ['all']
             },
             'circo': {
-                'data_dir': 'CIRCO/COCO2017_unlabeled',
-                'split_files': {
-                    'val': ['CIRCO/annotations/val.json'],
-                    'test': ['CIRCO/annotations/test.json']
+                'type': 'circo',
+                'data_dir': 'CIRCO/unlabeled2017',  # Direct path to images
+                'annotation_files': {
+                    'val': 'CIRCO/annotations/val.json',
+                    'test': 'CIRCO/annotations/test.json'
                 },
                 'categories': ['all']
             }
@@ -86,77 +91,191 @@ class MultiDatasetImageProcessor:
         return file_hash
 
     def collect_all_images(self, configs, splits=['train', 'val', 'test']):
-        """Collect images from all datasets"""
+        """Collect images from all datasets
+
+        Handles different dataset structures:
+        - FashionIQ: Split file is list of IDs, images in category subdirs
+        - CIRR: Split file is dict {id: relative_path}
+        - CIRCO: Scan all images in the image directory
+        """
         all_images = []
         all_info = {}
-        
+
         for dataset_name, config in configs.items():
+            dataset_type = config.get('type', dataset_name)
             data_dir = config['data_dir']
-            
-            for split in splits:
-                if split not in config['split_files']:
-                    continue
-                
-                for category in config['categories']:
-                    for split_file in config['split_files'][split]:
-                        print(f"Processing {dataset_name}/{category}/{split}: {split_file}")
-                        
-                        if not os.path.exists(split_file):
-                            print(f"Warning: Split file not found: {split_file}")
-                            continue
-                        
-                        with open(split_file, 'r') as f:
-                            if dataset_name == 'circo' and 'annotations' in split_file:
-                                # CIRCO JSON file format
-                                data = json.load(f)
-                                image_ids = set()
-                                for item in data:
-                                    if 'reference_img_id' in item:
-                                        image_ids.add(str(item['reference_img_id']))
-                                    if 'target_img_id' in item:
-                                        image_ids.add(str(item['target_img_id']))
-                                image_ids = list(image_ids)
-                            else:
-                                # Normal JSON file format (list of image IDs)
-                                image_ids = json.load(f)
-                        
-                        for image_id in image_ids:
-                            if dataset_name == 'circo':
-                                # CIRCO uses COCO format filenames
-                                image_filename = f"{image_id.zfill(12)}.jpg"
-                            else:
-                                # FashionIQ and CIRR have extensions
-                                image_filename = image_id
-                            
-                            image_path = os.path.join(data_dir, image_filename)
-                            
-                            if os.path.exists(image_path):
-                                img_hash = self.get_image_hash(image_path)
-                                
-                                if img_hash not in all_info:
-                                    all_images.append(image_path)
-                                    all_info[img_hash] = {
-                                        'dataset': dataset_name,
-                                        'category': category,
-                                        'split': split,
-                                        'image_id': image_id,
-                                        'image_path': image_path
-                                    }
-                            else:
-                                print(f"Warning: Image not found: {image_path}")
-        
+
+            if dataset_type == 'fashioniq':
+                self._collect_fashioniq_images(
+                    config, splits, all_images, all_info
+                )
+            elif dataset_type == 'cirr':
+                self._collect_cirr_images(
+                    config, splits, all_images, all_info
+                )
+            elif dataset_type == 'circo':
+                self._collect_circo_images(
+                    config, all_images, all_info
+                )
+            else:
+                print(f"Warning: Unknown dataset type: {dataset_type}")
+
         print(f"\nTotal unique images collected: {len(all_images)}")
         print(f"Dataset distribution:")
-        
+
         dataset_counts = {}
         for info in all_info.values():
             key = f"{info['dataset']}/{info['split']}"
             dataset_counts[key] = dataset_counts.get(key, 0) + 1
-        
-        for key, count in dataset_counts.items():
+
+        for key, count in sorted(dataset_counts.items()):
             print(f"  {key}: {count}")
-        
+
         return all_images, all_info
+
+    def _collect_fashioniq_images(self, config, splits, all_images, all_info):
+        """Collect FashionIQ images
+
+        FashionIQ structure:
+        - Split file: list of image IDs (without extension)
+        - Image path: images/{category}/{image_id}.jpg
+        """
+        data_dir = config['data_dir']
+
+        for split in splits:
+            if split not in config.get('split_files', {}):
+                continue
+
+            for split_file in config['split_files'][split]:
+                # Extract category from filename (e.g., split.dress.train.json -> dress)
+                filename = os.path.basename(split_file)
+                category = None
+                for cat in ['dress', 'shirt', 'toptee']:
+                    if cat in filename:
+                        category = cat
+                        break
+
+                if category is None:
+                    print(f"Warning: Cannot determine category for {split_file}")
+                    continue
+
+                print(f"Processing fashion-iq/{category}/{split}: {split_file}")
+
+                if not os.path.exists(split_file):
+                    print(f"  Warning: Split file not found: {split_file}")
+                    continue
+
+                with open(split_file, 'r') as f:
+                    image_ids = json.load(f)
+
+                existing_count = 0
+                for image_id in image_ids:
+                    # FashionIQ: images/{category}/{image_id}.jpg
+                    image_path = os.path.join(data_dir, category, f"{image_id}.jpg")
+
+                    if os.path.exists(image_path):
+                        img_hash = self.get_image_hash(image_path)
+
+                        if img_hash not in all_info:
+                            all_images.append(image_path)
+                            all_info[img_hash] = {
+                                'dataset': 'fashion-iq',
+                                'category': category,
+                                'split': split,
+                                'image_id': image_id,
+                                'image_path': image_path
+                            }
+                        existing_count += 1
+
+                print(f"  Found {existing_count}/{len(image_ids)} images")
+
+    def _collect_cirr_images(self, config, splits, all_images, all_info):
+        """Collect CIRR images
+
+        CIRR structure:
+        - Split file: dict {image_id: relative_path} (e.g., "./dev/dev-xxx.png")
+        - Image path: img_raw/{relative_path without ./}
+        """
+        data_dir = config['data_dir']
+
+        for split in splits:
+            if split not in config.get('split_files', {}):
+                continue
+
+            for split_file in config['split_files'][split]:
+                print(f"Processing cirr/{split}: {split_file}")
+
+                if not os.path.exists(split_file):
+                    print(f"  Warning: Split file not found: {split_file}")
+                    continue
+
+                with open(split_file, 'r') as f:
+                    # CIRR format: {image_id: "./split/image_id.png"}
+                    images_dict = json.load(f)
+
+                existing_count = 0
+                for image_id, relative_path in images_dict.items():
+                    # Remove leading "./" from relative path
+                    clean_path = relative_path.lstrip('./')
+                    image_path = os.path.join(data_dir, clean_path)
+
+                    if os.path.exists(image_path):
+                        img_hash = self.get_image_hash(image_path)
+
+                        if img_hash not in all_info:
+                            all_images.append(image_path)
+                            all_info[img_hash] = {
+                                'dataset': 'cirr',
+                                'category': 'all',
+                                'split': split,
+                                'image_id': image_id,
+                                'image_path': image_path
+                            }
+                        existing_count += 1
+
+                print(f"  Found {existing_count}/{len(images_dict)} images")
+
+    def _collect_circo_images(self, config, all_images, all_info):
+        """Collect CIRCO images
+
+        CIRCO structure:
+        - Scan all images in unlabeled2017/
+        - Image ID is filename without extension and leading zeros
+        """
+        data_dir = config['data_dir']
+
+        print(f"Processing circo: scanning {data_dir}")
+
+        if not os.path.exists(data_dir):
+            print(f"  Warning: Image directory not found: {data_dir}")
+            return
+
+        # Scan all image files in directory
+        image_files = []
+        for filename in os.listdir(data_dir):
+            if filename.lower().endswith(('.jpg', '.jpeg', '.png')):
+                image_files.append(filename)
+
+        print(f"  Found {len(image_files)} image files")
+
+        for image_filename in image_files:
+            image_path = os.path.join(data_dir, image_filename)
+
+            if os.path.exists(image_path):
+                img_hash = self.get_image_hash(image_path)
+
+                if img_hash not in all_info:
+                    # Image ID: filename without extension, strip leading zeros
+                    image_id = os.path.splitext(image_filename)[0].lstrip('0') or '0'
+
+                    all_images.append(image_path)
+                    all_info[img_hash] = {
+                        'dataset': 'circo',
+                        'category': 'all',
+                        'split': 'unlabeled',  # All CIRCO images as 'unlabeled'
+                        'image_id': image_id,
+                        'image_path': image_path
+                    }
 
 class ImageFeatureDataset(Dataset):
     """Dataset for image feature extraction"""
@@ -218,24 +337,42 @@ def collate_fn(batch):
         'indices': indices
     }
 
-def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size=32, num_workers=4):
-    """Extract and save features in PyTorch format"""
-    
+def extract_features_for_dataset(processor_instance, dataset_name, config, splits, batch_size=32, num_workers=4):
+    """Extract features for a single dataset and save to its directory"""
+
+    # Determine output directory based on dataset
+    dataset_output_dirs = {
+        'fashion-iq': 'fashion-iq',
+        'cirr': 'cirr',
+        'circo': 'CIRCO'
+    }
+    output_dir = dataset_output_dirs.get(dataset_name, dataset_name)
+
+    # Create output directory if needed
+    os.makedirs(output_dir, exist_ok=True)
+
     # Include model name in output filename
     model_suffix = processor_instance.model_name
     features_file = os.path.join(output_dir, f'features_{model_suffix}.pt')
     metadata_file = os.path.join(output_dir, f'metadata_{model_suffix}.pt')
-    
-    # Load dataset configuration
-    configs = processor_instance.load_dataset_configs()
-    
-    # Collect all images
-    all_images, all_info = processor_instance.collect_all_images(configs)
-    
+
+    # Collect images for this dataset only
+    all_images = []
+    all_info = {}
+
+    dataset_type = config.get('type', dataset_name)
+
+    if dataset_type == 'fashioniq':
+        processor_instance._collect_fashioniq_images(config, splits, all_images, all_info)
+    elif dataset_type == 'cirr':
+        processor_instance._collect_cirr_images(config, splits, all_images, all_info)
+    elif dataset_type == 'circo':
+        processor_instance._collect_circo_images(config, all_images, all_info)
+
     if len(all_images) == 0:
-        print("No images found!")
+        print(f"No images found for {dataset_name}!")
         return None, None
-    
+
     # Create dataset and dataloader
     dataset = ImageFeatureDataset(all_images, processor_instance)
     dataloader = DataLoader(
@@ -246,70 +383,70 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
         collate_fn=collate_fn,
         pin_memory=True if processor_instance.device == 'cuda' else False
     )
-    
-    print(f"\nExtracting features using {processor_instance.model_name.upper()}...")
+
+    print(f"\nExtracting features for {dataset_name} using {processor_instance.model_name.upper()}...")
     print(f"Total images: {len(all_images)}")
     print(f"Batch size: {batch_size}")
     print(f"Device: {processor_instance.device}")
-    
+
     # Feature extraction
     all_features = []
     all_hashes = []
     hash_to_idx = {}
-    
+
     with torch.no_grad():
-        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Extracting features")):
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Extracting {dataset_name}")):
             if batch is None:
                 continue
-            
+
             images = batch['images'].to(processor_instance.device)
             image_paths = batch['image_paths']
             indices = batch['indices']
-            
+
             # Model-specific feature extraction
             if processor_instance.model_name == "blip":
                 # BLIP feature extraction
                 vision_outputs = processor_instance.model.vision_model(pixel_values=images)
                 features = vision_outputs.last_hidden_state[:, 0, :].to(torch.float32)
                 features = F.normalize(processor_instance.model.vision_proj(features), dim=-1)
-            
+
             elif processor_instance.model_name == "clip":
                 # CLIP feature extraction
                 features = processor_instance.model.encode_image(images).to(torch.float32)
                 features = F.normalize(features, dim=-1)
-            
+
             # Move to CPU and save
             features_cpu = features.cpu()
             all_features.append(features_cpu)
-            
+
             # Calculate hash
             for i, (path, idx) in enumerate(zip(image_paths, indices)):
                 img_hash = processor_instance.get_image_hash(path)
                 all_hashes.append(img_hash)
                 hash_to_idx[img_hash] = len(all_hashes) - 1
-    
+
     # Concatenate features
     features_tensor = torch.cat(all_features, dim=0)
-    
-    print(f"\nFeature extraction completed!")
+
+    print(f"\nFeature extraction for {dataset_name} completed!")
     print(f"Features shape: {features_tensor.shape}")
     print(f"Features dtype: {features_tensor.dtype}")
-    
+
     # Prepare metadata
     idx_to_info = {}
     dataset_splits = {}
-    
+
     for idx, img_hash in enumerate(all_hashes):
         if img_hash in all_info:
             info = all_info[img_hash]
             idx_to_info[idx] = info
-            
-            # Record indices by dataset/split
-            key = f"{info['dataset']}/{info['split']}"
+
+            # Record indices by split
+            key = info['split']
             if key not in dataset_splits:
                 dataset_splits[key] = []
             dataset_splits[key].append(idx)
-    
+
     metadata = {
         'model_name': processor_instance.model_name,
         'feature_dim': processor_instance.feature_dim,
@@ -323,7 +460,7 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
             'num_workers': num_workers
         }
     }
-    
+
     # Save
     print(f"\nSaving features to: {features_file}")
     torch.save({
@@ -331,20 +468,66 @@ def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size
         'hashes': all_hashes,
         'hash_to_idx': hash_to_idx
     }, features_file)
-    
+
     print(f"Saving metadata to: {metadata_file}")
     torch.save(metadata, metadata_file)
-    
+
     # Display statistics
-    print(f"\n=== Extraction Summary ===")
+    print(f"\n=== {dataset_name} Extraction Summary ===")
     print(f"Model: {processor_instance.model_name.upper()}")
     print(f"Total images processed: {len(all_hashes)}")
     print(f"Feature dimension: {processor_instance.feature_dim}")
-    print(f"Dataset breakdown:")
+    print(f"Split breakdown:")
     for key, indices in dataset_splits.items():
         print(f"  {key}: {len(indices)} images")
-    
+
     return features_file, metadata_file
+
+
+def extract_and_save_features_pytorch(processor_instance, output_dir, batch_size=32, num_workers=4):
+    """Extract and save features for each dataset separately"""
+
+    # Load dataset configuration
+    configs = processor_instance.load_dataset_configs()
+
+    # Define splits to process
+    splits = ['train', 'val', 'test']
+
+    print(f"=== Extracting features for each dataset ===")
+    print(f"Datasets: {list(configs.keys())}")
+    print(f"Splits: {splits}")
+
+    results = {}
+
+    for dataset_name, config in configs.items():
+        print(f"\n{'='*50}")
+        print(f"Processing dataset: {dataset_name}")
+        print(f"{'='*50}")
+
+        features_file, metadata_file = extract_features_for_dataset(
+            processor_instance,
+            dataset_name,
+            config,
+            splits,
+            batch_size=batch_size,
+            num_workers=num_workers
+        )
+
+        if features_file and metadata_file:
+            results[dataset_name] = {
+                'features_file': features_file,
+                'metadata_file': metadata_file
+            }
+
+    print(f"\n{'='*50}")
+    print(f"=== All Datasets Completed ===")
+    print(f"{'='*50}")
+    for dataset_name, files in results.items():
+        print(f"{dataset_name}:")
+        print(f"  Features: {files['features_file']}")
+        print(f"  Metadata: {files['metadata_file']}")
+
+    return results
 
 class PyTorchFeatureLoader:
     """PyTorch format feature loader"""
@@ -435,42 +618,53 @@ class PyTorchFeatureLoader:
 
 def main():
     parser = argparse.ArgumentParser(description='Extract image features for multi-dataset CIR (PyTorch format)')
-    parser.add_argument('--model', choices=['blip', 'clip'], default='blip', 
+    parser.add_argument('--model', choices=['blip', 'clip'], default='blip',
                        help='Model to use for feature extraction')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for feature extraction')
     parser.add_argument('--num_workers', type=int, default=4, help='Number of workers for data loading')
     parser.add_argument('--device', default='cuda', help='Device for feature computation')
-    parser.add_argument('--output_dir', default='.', help='Output directory for features')
-    
+    parser.add_argument('--data_dir', type=str, default='.',
+                       help='Base directory containing dataset folders (fashion-iq/, cirr/, CIRCO/)')
+
     args = parser.parse_args()
-    
+
+    # Change to data directory
+    if args.data_dir != '.':
+        os.chdir(args.data_dir)
+        print(f"Working directory: {os.getcwd()}")
+
     print(f"=== Multi-Dataset Feature Extraction ===")
     print(f"Model: {args.model.upper()}")
     print(f"Device: {args.device}")
     print(f"Batch size: {args.batch_size}")
-    print(f"Output directory: {args.output_dir}")
-    
+    print(f"Output: Separate files per dataset (fashion-iq/, cirr/, CIRCO/)")
+
     # Initialize processor
     processor = MultiDatasetImageProcessor(model_name=args.model, device=args.device)
-    
-    # Feature extraction
-    features_file, metadata_file = extract_and_save_features_pytorch(
+
+    # Feature extraction for each dataset
+    results = extract_and_save_features_pytorch(
         processor,
-        args.output_dir,
+        output_dir=None,  # Not used, each dataset outputs to its own directory
         batch_size=args.batch_size,
         num_workers=args.num_workers
     )
-    
-    if features_file and metadata_file:
+
+    if results:
         print(f"\n=== Successfully completed ===")
-        print(f"Features: {features_file}")
-        print(f"Metadata: {metadata_file}")
-        
-        # Quick demo
-        print(f"\n=== Quick Demo ===")
-        loader = PyTorchFeatureLoader(features_file, metadata_file, device=args.device)
-        print(f"Feature tensor shape: {loader.features.shape}")
-        print(f"Feature tensor device: {loader.features.device}")
+        for dataset_name, files in results.items():
+            print(f"\n{dataset_name}:")
+            print(f"  Features: {files['features_file']}")
+            print(f"  Metadata: {files['metadata_file']}")
+
+            # Quick demo for each dataset
+            print(f"  --- Quick Demo ---")
+            loader = PyTorchFeatureLoader(
+                files['features_file'],
+                files['metadata_file'],
+                device=args.device
+            )
+            print(f"  Feature tensor shape: {loader.features.shape}")
     else:
         print("Feature extraction failed!")
 

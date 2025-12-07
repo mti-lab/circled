@@ -198,13 +198,13 @@ class OptimizedMultiTurnFilter:
         
         return None
     
-    def load_dataset_files(self, dataset_name: str) -> Tuple[Dict, pd.DataFrame, pd.DataFrame]:
+    def load_dataset_files(self, dataset_name: str, input_dir: str = '.') -> Tuple[Dict, pd.DataFrame, pd.DataFrame]:
         """Load dataset files (also works with JSON only)"""
         # File paths
-        json_file = f"multiturn_cir_results_{dataset_name}.json"
-        summary_file = f"multiturn_cir_summary_{dataset_name}.csv"
-        detailed_file = f"multiturn_cir_detailed_rankings_{dataset_name}.csv"
-        
+        json_file = os.path.join(input_dir, f"multiturn_cir_results_{dataset_name}.json")
+        summary_file = os.path.join(input_dir, f"multiturn_cir_summary_{dataset_name}.csv")
+        detailed_file = os.path.join(input_dir, f"multiturn_cir_detailed_rankings_{dataset_name}.csv")
+
         # Check if JSON file exists
         if not os.path.exists(json_file):
             raise FileNotFoundError(f"Required JSON file not found: {json_file}")
@@ -673,18 +673,21 @@ class OptimizedMultiTurnFilter:
         
         return analysis
     
-    def filter_dataset(self, dataset_name: str, apply_success: bool = True, 
+    def filter_dataset(self, dataset_name: str, apply_success: bool = True,
                        apply_multiturn: bool = True,
                        apply_original_query: bool = True,
                        apply_rank_margin: bool = True, apply_clip_similarity: bool = True,
                        apply_image_duplication: bool = True,
-                       save_filtered: bool = True) -> Dict:
+                       save_filtered: bool = True,
+                       input_dir: str = '.', output_dir: str = '.') -> Dict:
         """Execute dataset filtering"""
-        
+
         print(f"Starting filtering for dataset: {dataset_name}")
-        
-        # Save dataset name
+
+        # Save dataset name and directories
         self.dataset_name = dataset_name
+        self.input_dir = input_dir
+        self.output_dir = output_dir
         
         # Initialize image hash mapping
         if apply_image_duplication:
@@ -704,9 +707,9 @@ class OptimizedMultiTurnFilter:
         
         print(f"=== Filtering {dataset_name} ===")
         print(f"Loading {dataset_name} data...")
-        
+
         # Load data
-        json_data, summary_df, detailed_df = self.load_dataset_files(dataset_name)
+        json_data, summary_df, detailed_df = self.load_dataset_files(dataset_name, input_dir=input_dir)
         print(f"Loaded: {len(json_data['results'])} results, {len(summary_df)} summary rows, {len(detailed_df)} detailed rows")
         
         # Record filtering stages
@@ -824,14 +827,14 @@ class OptimizedMultiTurnFilter:
         )
         
         # Save report
-        report_filename = f"filtering_report_{dataset_name}.json"
+        report_filename = os.path.join(output_dir, f"filtering_report_{dataset_name}.json")
         with open(report_filename, 'w', encoding='utf-8') as f:
             json.dump(detailed_report, f, indent=2, ensure_ascii=False)
         print(f"Detailed report saved to: {report_filename}")
-        
+
         if save_filtered:
             # Save filtered data
-            output_filename = f"filtered_multiturn_cir_{dataset_name}.json"
+            output_filename = os.path.join(output_dir, f"filtered_multiturn_cir_{dataset_name}.json")
             with open(output_filename, 'w') as f:
                 json.dump(filtered_data, f, indent=2)
             print(f"Filtered dataset saved to: {output_filename}")
@@ -1126,9 +1129,12 @@ class OptimizedMultiTurnFilter:
     def get_dataset_baseline_stats(self, dataset_name: str) -> Dict:
         """Get basic statistics of the dataset"""
         stats = {}
-        
+
+        # Get input_dir from instance variable
+        input_dir = getattr(self, 'input_dir', '.')
+
         # Check actually processed data
-        json_file = f"multiturn_cir_results_{dataset_name}.json"
+        json_file = os.path.join(input_dir, f"multiturn_cir_results_{dataset_name}.json")
         if os.path.exists(json_file):
             with open(json_file, 'r') as f:
                 json_data = json.load(f)
@@ -1334,9 +1340,30 @@ def main():
                        help='Only analyze, do not save filtered data')
     parser.add_argument('--random-seed', type=int, default=42,
                        help='Random seed for reproducible example selection')
-    
+    parser.add_argument('--data_dir', type=str, default='.',
+                       help='Base directory containing dataset folders')
+    parser.add_argument('--input_dir', type=str, default='output/raw',
+                       help='Input directory for raw result files (default: output/raw)')
+    parser.add_argument('--output_dir', type=str, default='output/filtered',
+                       help='Output directory for filtered files (default: output/filtered)')
+
     args = parser.parse_args()
-    
+
+    # Convert input_dir and output_dir to absolute paths before changing directory
+    # This allows input/output to be independent of data_dir
+    args.input_dir = os.path.abspath(args.input_dir)
+    args.output_dir = os.path.abspath(args.output_dir)
+
+    # Change to data directory
+    if args.data_dir != '.':
+        os.chdir(args.data_dir)
+        print(f"Working directory: {os.getcwd()}")
+
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    print(f"Input directory: {args.input_dir}")
+    print(f"Output directory: {args.output_dir}")
+
     # Set random seed
     random.seed(args.random_seed)
     np.random.seed(args.random_seed)
@@ -1359,7 +1386,9 @@ def main():
                 apply_rank_margin=not args.no_rank_margin_filter,
                 apply_clip_similarity=not args.no_clip_filter,
                 apply_image_duplication=not args.no_image_duplication_filter,
-                save_filtered=not args.analyze_only
+                save_filtered=not args.analyze_only,
+                input_dir=args.input_dir,
+                output_dir=args.output_dir
             )
             results.append(result)
         except Exception as e:

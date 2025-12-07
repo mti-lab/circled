@@ -306,29 +306,75 @@ class ModelManager:
         ]
         
         response = await self.call_gpt4o_mini(messages, max_tokens=50)
-        
+
         # Remove unnecessary prefixes and redundant expressions
-        response = response.strip()
-        
-        # More comprehensive list of unwanted prefixes
-        unwanted_prefixes = [
+        response = self._clean_caption_text(response)
+
+        return response.strip()
+
+    def _clean_caption_text(self, text: str) -> str:
+        """Clean caption text by removing redundant prefixes and expressions.
+
+        Combines patterns from clean_captions.py and GPT output formatting prefixes.
+        """
+        import re
+
+        if not text or not isinstance(text, str):
+            return text
+
+        cleaned = text.strip()
+
+        # GPT output formatting prefixes (exact match, case-insensitive)
+        gpt_prefixes = [
             "Comprehensive Caption:",
             "New caption:",
             "Caption:",
             "Combined caption:",
             "Result:",
-            "This striking image",
-            "The image shows",
-            "In this image"
         ]
-        
-        for prefix in unwanted_prefixes:
-            if response.lower().startswith(prefix.lower()):
-                response = response[len(prefix):].strip()
-                if response.startswith(':'):
-                    response = response[1:].strip()
-        
-        return response.strip()
+
+        for prefix in gpt_prefixes:
+            if cleaned.lower().startswith(prefix.lower()):
+                cleaned = cleaned[len(prefix):].strip()
+                if cleaned.startswith(':'):
+                    cleaned = cleaned[1:].strip()
+
+        # Redundant image description patterns (regex-based, from clean_captions.py)
+        redundant_patterns = [
+            r'^The image features?\s+',
+            r'^The image shows?\s+',
+            r'^The image depicts?\s+',
+            r'^The image captures?\s+',
+            r'^The image displays?\s+',
+            r'^The image presents?\s+',
+            r'^The image contains?\s+',
+            r'^The image includes?\s+',
+            r'^The image showcases?\s+',
+            r'^This image features?\s+',
+            r'^This image shows?\s+',
+            r'^This image depicts?\s+',
+            r'^This image captures?\s+',
+            r'^This image displays?\s+',
+            r'^This image presents?\s+',
+            r'^This image contains?\s+',
+            r'^This image includes?\s+',
+            r'^This striking image\s+',
+            r'^In the image,?\s+',
+            r'^In this image,?\s+',
+            r'^The photo features?\s+',
+            r'^The photo shows?\s+',
+            r'^The picture features?\s+',
+            r'^The picture shows?\s+',
+        ]
+
+        for pattern in redundant_patterns:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+
+        # Capitalize first letter if needed
+        if cleaned:
+            cleaned = cleaned[0].upper() + cleaned[1:] if len(cleaned) > 1 else cleaned.upper()
+
+        return cleaned.strip()
 
     async def generate_relative_caption_with_gpt4o(self, ref_image_path: str, target_image_path: str,
                                                   previous_captions: List[str] = None,
@@ -383,8 +429,9 @@ class ModelManager:
             ]
             
             generated_caption = await self.call_gpt4o_mini(messages, max_tokens=60)
-            # Remove quotes and extra characters
-            return generated_caption.strip('"\'')
+            # Remove quotes and extra characters, then clean redundant expressions
+            cleaned_caption = self._clean_caption_text(generated_caption.strip('"\''))
+            return cleaned_caption
 
         # Function for CLIP feature computation
         def get_clip_text_feature(text: str) -> torch.Tensor:
@@ -475,6 +522,8 @@ class ModelManager:
             
             # Remove quotes and extra characters
             generated_caption = generated_caption.strip('"\'')
+            # Clean redundant expressions
+            generated_caption = self._clean_caption_text(generated_caption)
 
             if not generated_caption:
                 if attempt == max_retries - 1:
@@ -595,7 +644,7 @@ class RetrievalEngine:
         elif 'cirr' in corpus_vectors_file.lower():
             image_base_dir = 'cirr/img_raw'
         elif 'circo' in corpus_vectors_file.lower():
-            image_base_dir = 'CIRCO/COCO2017_unlabeled/unlabeled2017'
+            image_base_dir = 'CIRCO/unlabeled2017'
         else:
             image_base_dir = ''  # Fallback
         
@@ -1027,7 +1076,8 @@ class MultiTurnCIRSystem:
     
     def load_existing_results(self) -> None:
         """Load existing results file for resume preparation"""
-        output_file = f"multiturn_cir_results_{self.dataset_name}.json"
+        output_dir = self.config.get('output_dir', '.')
+        output_file = os.path.join(output_dir, f"multiturn_cir_results_{self.dataset_name}.json")
         
         if os.path.exists(output_file):
             try:
@@ -1308,14 +1358,14 @@ class MultiTurnCIRSystem:
             if reference_image_id in self.hash_to_filename:
                 filename = self.hash_to_filename[reference_image_id]
                 potential_keys.extend([
-                    f"CIRCO/COCO2017_unlabeled/unlabeled2017/{filename}",
+                    f"CIRCO/unlabeled2017/{filename}",
                     filename
                 ])
             else:
                 # If not hash value (12-digit format), use as-is
                 potential_keys.extend([
-                    f"CIRCO/COCO2017_unlabeled/unlabeled2017/{reference_image_id}",
-                    f"CIRCO/COCO2017_unlabeled/unlabeled2017/{reference_image_id}.jpg"
+                    f"CIRCO/unlabeled2017/{reference_image_id}",
+                    f"CIRCO/unlabeled2017/{reference_image_id}.jpg"
                 ])
         
         # Search with candidate keys
@@ -1993,7 +2043,8 @@ class MultiTurnCIRSystem:
         }
         
         # Save to results file
-        results_file = f"multiturn_cir_results_{self.dataset_name}.json"
+        output_dir = self.config.get('output_dir', '.')
+        results_file = os.path.join(output_dir, f"multiturn_cir_results_{self.dataset_name}.json")
         with open(results_file, 'w', encoding='utf-8') as f:
             json.dump(final_results, f, indent=2, ensure_ascii=False)
         
@@ -2245,7 +2296,7 @@ class MultiTurnCIRSystem:
                             # Extract image filename from full path (without extension)
                             if '/' in image_id:
                                 # fashion-iq/images/dress/B008BHCT58.jpg -> B008BHCT58
-                                # CIRCO/COCO2017_unlabeled/unlabeled2017/000000212560.jpg -> 000000212560.jpg
+                                # CIRCO/unlabeled2017/000000212560.jpg -> 000000212560.jpg
                                 image_filename = image_id.split('/')[-1]
                                 if '.' in image_filename:
                                     image_filename_no_ext = image_filename.rsplit('.', 1)[0]  # Remove extension
@@ -2482,16 +2533,33 @@ def main():
     parser.add_argument('--device', type=str, default='auto',
                        choices=['auto', 'cpu', 'cuda'],
                        help='Device to use: auto (default, use CUDA if available), cpu, cuda')
-    
+    parser.add_argument('--data_dir', type=str, default='.',
+                       help='Base directory containing dataset folders (fashion-iq/, cirr/, CIRCO/)')
+    parser.add_argument('--output_dir', type=str, default='output/raw',
+                       help='Output directory for result files (default: output/raw)')
+
     args = parser.parse_args()
-    
+
+    # Convert output_dir to absolute path before changing directory
+    # This allows output to be independent of data_dir
+    args.output_dir = os.path.abspath(args.output_dir)
+
+    # Change to data directory
+    if args.data_dir != '.':
+        os.chdir(args.data_dir)
+        print(f"Working directory: {os.getcwd()}")
+
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+    print(f"Output directory: {args.output_dir}")
+
     # Update global device setting
     global device
     if args.device == 'auto':
         device = "cuda" if torch.cuda.is_available() else "cpu"
     else:
         device = args.device
-    
+
     print(f"Using device: {device}")
     
     # Configuration
@@ -2500,7 +2568,7 @@ def main():
             'annotation_file': 'CIRCO/annotations/val.json',
             'corpus_vectors_file': 'CIRCO/features_blip.pt',  # BLIP feature file
             'search_space_file': 'CIRCO/metadata_blip.pt',    # Search space metadata
-            'image_dir': 'CIRCO/COCO2017_unlabeled/unlabeled2017',  # COCO2017 unlabeled 120k image pool
+            'image_dir': 'CIRCO/unlabeled2017',  # COCO2017 unlabeled 120k image pool
             'caption_file': 'CIRCO/captions_gpt4omini.json',     # GPT-4o-mini captions
             'gpt4omini_caption_features_file': 'CIRCO/gpt4omini_captions_blip_features.pt',  # gpt4omini caption features
             'use_blip': True,
@@ -2617,7 +2685,8 @@ def main():
         return
     
     config = datasets_config[dataset_name]
-    
+    config['output_dir'] = args.output_dir
+
     # For Fashion-IQ dataset, set caption processing mode
     if dataset_name.startswith('fashioniq'):
         config['caption_mode'] = args.caption_mode

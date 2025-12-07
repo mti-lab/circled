@@ -182,18 +182,23 @@ def extract_missing_features(extractor, all_captions, all_image_ids, existing_im
 def process_dataset(dataset_name, caption_file, output_dir, extractor, force_reprocess=False):
     """Process each dataset (with incremental update support)"""
     print(f"\n=== Processing {dataset_name} dataset ===")
-    
+
     # Load captions
     captions, image_ids = load_gpt4omini_captions(caption_file)
-    
+
     if len(captions) == 0:
         print(f"Warning: No captions found for {dataset_name}")
         return
-    
-    # Create output directory
-    dataset_output_dir = Path(output_dir) / dataset_name
+
+    # Output directly to dataset directory (matching other feature files)
+    dataset_dirs = {
+        'CIRR': 'cirr',
+        'CIRCO': 'CIRCO',
+        'Fashion-IQ': 'fashion-iq'
+    }
+    dataset_output_dir = Path(dataset_dirs.get(dataset_name, dataset_name))
     dataset_output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Output file paths
     clip_output_file = dataset_output_dir / 'gpt4omini_captions_clip_features.pt'
     blip_output_file = dataset_output_dir / 'gpt4omini_captions_blip_features.pt'
@@ -296,9 +301,16 @@ def main():
                        help='Device to use')
     parser.add_argument('--force-reprocess', action='store_true',
                        help='Force reprocess ignoring existing feature files')
-    
+    parser.add_argument('--data_dir', type=str, default='.',
+                       help='Base directory containing dataset folders (fashion-iq/, cirr/, CIRCO/)')
+
     args = parser.parse_args()
-    
+
+    # Change to data directory
+    if args.data_dir != '.':
+        os.chdir(args.data_dir)
+        print(f"Working directory: {os.getcwd()}")
+
     print("=== Starting GPT-4o mini caption feature extraction ===")
     print(f"Device: {args.device}")
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -308,18 +320,18 @@ def main():
     # Initialize feature extractor
     extractor = CaptionFeatureExtractor(device=args.device)
     
-    # Dataset configuration (using cleaned caption files)
+    # Dataset configuration (caption files in each dataset directory)
     dataset_configs = {
         'cirr': {
             'caption_file': './cirr/captions_gpt4omini.json',
             'name': 'CIRR'
         },
         'circo': {
-            'caption_file': './circo/captions_gpt4omini_circo.json',
+            'caption_file': './CIRCO/captions_gpt4omini.json',
             'name': 'CIRCO'
         },
         'fashion-iq': {
-            'caption_file': './fashion-iq/captions_gpt4omini_fashion-iq.json',
+            'caption_file': './fashion-iq/captions_gpt4omini.json',
             'name': 'Fashion-IQ'
         }
     }

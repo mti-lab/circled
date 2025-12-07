@@ -119,7 +119,7 @@ class OpenAIGPT4oCaptionGenerator:
                 }
             },
             'circo': {
-                'data_dir': 'CIRCO/COCO2017_unlabeled/unlabeled2017',
+                'data_dir': 'CIRCO/unlabeled2017',
                 'categories': ['all']
             }
         }
@@ -525,7 +525,14 @@ class OpenAIGPT4oCaptionGenerator:
             return {}
         
         if output_file is None:
-            output_file = f"captions_gpt4omini_{dataset_name}.json"
+            # Output to each dataset directory
+            dataset_dirs = {
+                'fashion-iq': 'fashion-iq',
+                'cirr': 'cirr',
+                'circo': 'CIRCO'
+            }
+            dataset_dir = dataset_dirs.get(dataset_name, dataset_name)
+            output_file = f"{dataset_dir}/captions_gpt4omini.json"
         temp_output_file = output_file + ".tmp"
         
         # Load existing caption file (resume functionality)
@@ -685,12 +692,25 @@ async def main():
                        help='Force restart from beginning, ignoring existing caption files')
     parser.add_argument('--check-progress', action='store_true',
                        help='Only check progress without generating new captions')
-    
+    parser.add_argument('--data_dir', type=str, default='.',
+                       help='Base directory containing dataset folders (fashion-iq/, cirr/, CIRCO/)')
+
     args = parser.parse_args()
+
+    # Change to data directory
+    if args.data_dir != '.':
+        os.chdir(args.data_dir)
+        print(f"Working directory: {os.getcwd()}")
     
-    # Set output file name
+    # Set output file name (output to each dataset directory)
     if not args.output:
-        args.output = f'captions_gpt4omini_{args.dataset}.json'
+        dataset_dirs = {
+            'fashion-iq': 'fashion-iq',
+            'cirr': 'cirr',
+            'circo': 'CIRCO'
+        }
+        dataset_dir = dataset_dirs.get(args.dataset, args.dataset)
+        args.output = f'{dataset_dir}/captions_gpt4omini_{args.dataset}.json'
     
     try:
         # Initialize caption generator
