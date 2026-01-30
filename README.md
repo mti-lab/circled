@@ -165,11 +165,12 @@ python src/convert_to_public.py --input-dir output/filtered --output-dir output/
 ## Citation
 
 ```bibtex
-@article{circled2025,
+@article{circled2026,
   title={CIRCLED: A Multi-turn CIR Dataset with Consistent Dialogues across Domains},
-  author={Anonymous},
-  journal={Under review},
-  year={2025}
+  author={Tomohisa Takeda and Yu-Chieh Lin and Yuji Nozawa and Youyang Ng and Osamu Torii and Yusuke Matsui},
+  journal={DMLR},
+  year={2026},
+  note={Under review}
 }
 ```
 
