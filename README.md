@@ -2,6 +2,8 @@
 
 [![Hugging Face](https://img.shields.io/badge/🤗%20HuggingFace-Dataset-yellow)](https://huggingface.co/datasets/tk1441/CIRCLED)
 
+The CIRCLED dataset is available on [Hugging Face](https://huggingface.co/datasets/tk1441/CIRCLED).
+
 This repository contains the code used to construct the CIRCLED dataset, a multi-turn Composed Image Retrieval (CIR) dataset with consistent dialogues across domains.
 
 ## Overview
